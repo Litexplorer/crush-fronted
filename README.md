@@ -62,8 +62,9 @@ SSE 代理已关闭响应缓冲（`selfHandleResponse` + 立即 flush 响应头�
 - 权限 Dock：Allow once / Allow for session / Deny；YOLO 开关
 - Question Dock：single/multi/yes_no/free_text 四种题型
 - Composer：模型选择器（显示供应商 + 完整模型名；catwalk 目录 + workspace 自定义 provider）、`@` 文件/文件夹引用（↑↓ 选择、Enter/Tab 添加、→ 进入目录、← 返回）、附件 chips
+- 图片分析：Composer 支持粘贴（Ctrl/Cmd+V）与拖拽图片，最多 4 张 / 单张 10 MB，以 base64 内联附件随 prompt 发送；历史消息渲染缩略图，点击全屏查看。当前模型 `supports_attachments=false` 时发送前提示切换模型
 - 右侧面板：Q&A 问答索引（点击跳转到对应问句并高亮）、Files 文件树、Review（filetracker + history diff）、Terminal（shell 接口）
-- 标题栏：多会话标签页（切换/关闭，关闭后自动跳到相邻标签）、新建会话、主题切换、状态浮层（Server / MCP / LSP / Skills）
+- 标题栏：多会话标签页（左右滚动 + 溢出菜单，切换/关闭后自动跳到相邻标签）、打开已有会话（搜索当前项目历史）、新建会话、标签持久化（记录项目路径，服务端重启后自动恢复）、主题切换、状态浮层（Server / MCP / LSP / Skills）
 - 设置弹窗：主题、工作区信息、YOLO、模型、Skills
 - 断线恢复：workspace id 失效时按持久化路径自动重建（服务端重启后仍能回到原项目）
 
@@ -80,6 +81,8 @@ src/
                                permissions / questions / models / files / review /
                                diagnostics / ui-store / workspace-store / mermaid / usage /
                                subagents（子会话 ID、prompt/title/metadata 解析与懒加载）
+                               agent.ts 附件字段：@ 文件传 file_path；粘贴图片传
+                               file_name + mime_type + content（base64）
   components/
     titlebar.tsx               顶栏：标签页、主题、连接状态
     status-popover.tsx         MCP / LSP / Skills 状态浮层

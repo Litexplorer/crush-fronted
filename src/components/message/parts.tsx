@@ -8,16 +8,17 @@
  *                           按 tool_call_id 合并对应 tool_result 一并展示
  *           tool_result     无对应调用时独立成卡
  *           shell_command   $ command + output 等宽卡片
- *           image_url/binary [image] 占位
+ *           image_url/binary 图片缩略图（点击放大），非图片 binary 仍显示 [image] 占位
  *           finish          底部一行小字（结果 + 耗时）
  */
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import type { ContentPart, SessionMessage } from "../../lib/sessions"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
 import { useSubagentStore } from "./subagent-context"
+import RunningIndicator from "./running-indicator"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
 
 /** 时间线消息：proto.Message + 乐观插入 pending 标记 */
@@ -74,6 +75,85 @@ export interface ShellCommandPartData {
   exit_code?: number
 }
 
+/** binary 分片：Go 结构体无 json tag，字段名为大写；Data 为 base64 */
+export interface BinaryPartData {
+  Path?: string
+  MIMEType?: string
+  Data?: string
+}
+
+/** image_url 分片：{ url, detail }，url 可为 http(s) 或 data URL */
+export interface ImageUrlPartData {
+  url?: string
+  detail?: string
+}
+
+/**
+ * imageSrc
+ * 参数：part 内容分片
+ * 核心流程：binary 的 base64 拼成 data URL（仅 image/*），image_url 直接取 url；
+ *           其余类型或非图片返回 undefined
+ */
+export function imageSrc(part: ContentPart): string | undefined {
+  if (part.type === "binary") {
+    const data = (part.data ?? {}) as BinaryPartData
+    if (!data.Data || !data.MIMEType?.startsWith("image/")) return undefined
+    return `data:${data.MIMEType};base64,${data.Data}`
+  }
+  if (part.type === "image_url") {
+    const data = (part.data ?? {}) as ImageUrlPartData
+    return data.url || undefined
+  }
+  return undefined
+}
+
+/**
+ * MessageImage
+ * 参数：src 图片地址；alt 无障碍文案
+ * 核心流程：消息内展示限高缩略图，点击打开全屏遮罩预览，再点任意处关闭
+ */
+function MessageImage(props: { src: string; alt?: string }) {
+  const [open, setOpen] = createSignal(false)
+
+  // 全屏预览打开时监听 Escape：与点击遮罩一样关闭预览
+  createEffect(() => {
+    if (!open()) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("keydown", onKey)
+    onCleanup(() => document.removeEventListener("keydown", onKey))
+  })
+
+  return (
+    <>
+      <button
+        type="button"
+        class="block max-w-full overflow-hidden rounded-lg border border-edge transition-opacity hover:opacity-90"
+        onClick={() => setOpen(true)}
+      >
+        <img
+          src={props.src}
+          alt={props.alt ?? "attachment"}
+          class="max-h-[240px] max-w-full object-contain"
+        />
+      </button>
+      <Show when={open()}>
+        <div
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+          onClick={() => setOpen(false)}
+        >
+          <img
+            src={props.src}
+            alt={props.alt ?? "attachment"}
+            class="max-h-full max-w-full object-contain"
+          />
+        </div>
+      </Show>
+    </>
+  )
+}
+
 /**
  * partText
  * 参数：part 内容分片
@@ -119,8 +199,15 @@ function finishLabel(reason: string): string {
  *           其余 role → 左对齐无气泡，按 parts 渲染
  */
 export function MessageItem(props: { message: TimelineMessage; showFinish?: boolean }) {
-  // 空用户消息（中断/仅内部标记）不渲染气泡，避免出现空白圆角块
-  if (props.message.role === "user" && !textOf(props.message).trim()) return null
+  // 空用户消息（中断/仅内部标记）不渲染气泡，避免出现空白圆角块；
+  // 仅含图片的消息仍要渲染（历史里的图片附件没有文本）
+  if (
+    props.message.role === "user" &&
+    !textOf(props.message).trim() &&
+    !props.message.parts.some((part) => imageSrc(part))
+  ) {
+    return null
+  }
   // 压缩摘要：不按普通 assistant 消息排版，渲染为可折叠的会话压缩卡片
   if (props.message.is_summary_message) return <SummaryMessage message={props.message} />
   return (
@@ -130,10 +217,22 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
     >
       <div class="flex justify-end">
         <div
-          class="max-w-[80%] rounded-[12px] bg-raised px-3.5 py-2.5 text-[13px] leading-5 break-words whitespace-pre-wrap text-text"
+          class="flex max-w-[80%] flex-col gap-2 rounded-[12px] bg-raised px-3.5 py-2.5 text-[13px] leading-5 break-words text-text"
           classList={{ "opacity-60": props.message.pending === true }}
         >
-          {textOf(props.message)}
+          <For each={props.message.parts}>
+            {(part) => {
+              // 文本分片：保留换行；hidden（上下文注入）不展示
+              if (part.type === "text") {
+                const text = partText(part)
+                return <Show when={text.trim().length > 0}><div class="whitespace-pre-wrap">{text}</div></Show>
+              }
+              // 图片分片：binary（base64）或 image_url，转成缩略图
+              const src = imageSrc(part)
+              if (!src) return null
+              return <MessageImage src={src} />
+            }}
+          </For>
         </div>
       </div>
     </Show>
@@ -218,6 +317,13 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
     const last = calls[calls.length - 1]
     const data = (last?.data ?? {}) as ToolCallPartData
     return last && !data.finished ? data.id : undefined
+  })
+
+  // 运行中文案：正文尚未出现且已有 reasoning 时显示 Thinking；否则只展示字符带
+  const runningLabel = createMemo(() => {
+    const hasText = props.message.parts.some((p) => p.type === "text" && partText(p).trim().length > 0)
+    if (hasText) return undefined
+    return props.message.parts.some((p) => p.type === "reasoning") ? "Thinking" : undefined
   })
 
   // 已合并进 tool_call 卡片的 tool_result 下标
@@ -334,8 +440,11 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               return <ShellCommandCard command={sc.command ?? ""} output={sc.output ?? ""} />
             }
             case "image_url":
-            case "binary":
-              return <div class="text-[12px] text-faint">[image]</div>
+            case "binary": {
+              // 图片渲染缩略图；非图片 binary（如文本附件）保持占位
+              const src = imageSrc(part)
+              return src ? <MessageImage src={src} /> : <div class="text-[12px] text-faint">[image]</div>
+            }
             case "finish": {
               // 仅最后一条消息展示结果行，且只认最后一个分片，避免多步 step 重复
               if (props.showFinish === false) return null
@@ -349,6 +458,10 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
           }
         }}
       </For>
+      {/* 生成中：底部滚动字符带，表示当前回合仍在运行 */}
+      <Show when={isStreaming()}>
+        <RunningIndicator label={runningLabel()} />
+      </Show>
     </div>
   )
 }

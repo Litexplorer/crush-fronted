@@ -32,8 +32,12 @@ interface ModelGroup {
 export default function ModelSelect(props: {
   wsId: string
   onToast: (msg: string) => void
-  /** 当前模型变化：上报选中项与其 context_window，供 Composer 用量指示器计算占比 */
-  onModelChange?: (model: SelectedModel | undefined, contextWindow: number | undefined) => void
+  /** 当前模型变化：上报选中项、context_window 与图片能力，供 Composer 用量指示与粘贴校验 */
+  onModelChange?: (
+    model: SelectedModel | undefined,
+    contextWindow: number | undefined,
+    supportsImages: boolean | undefined,
+  ) => void
 }) {
   const [providers, setProviders] = createSignal<Provider[]>([])
   const [configProviders, setConfigProviders] = createSignal<Provider[]>([])
@@ -110,12 +114,23 @@ export default function ModelSelect(props: {
   }
 
   /**
+   * supportsImagesOf
+   * 参数：model 选中的 provider/model
+   * 核心流程：在合并后的目录中查 supports_attachments；未知时返回 undefined
+   */
+  function supportsImagesOf(model: SelectedModel | undefined): boolean | undefined {
+    if (!model?.provider || !model.model) return undefined
+    const provider = allProviders().find((p) => p.id === model.provider)
+    return provider?.models?.find((m) => m.id === model.model)?.supports_attachments
+  }
+
+  /**
    * emitModel
    * 参数：model 选中项
-   * 核心流程：把模型与其上下文窗口同步给外部用量指示器
+   * 核心流程：把模型、上下文窗口与图片能力同步给外部（用量指示器 / 图片粘贴校验）
    */
   function emitModel(model: SelectedModel | undefined) {
-    props.onModelChange?.(model, contextWindowOf(model))
+    props.onModelChange?.(model, contextWindowOf(model), supportsImagesOf(model))
   }
 
   /**

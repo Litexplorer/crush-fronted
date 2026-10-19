@@ -5,14 +5,17 @@
  *           左侧：主页按钮 + 当前会话标签页（可关闭）+ 新建会话按钮
  *           右侧：主题切换按钮 + 后端连接状态圆点（GET /v1/health 轮询）
  */
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
-import { createSession } from "../lib/sessions"
-import { selectedWorkspace } from "../lib/workspace-store"
+import { createSession, listSessions, type Session } from "../lib/sessions"
+import { createWorkspace } from "../lib/workspaces"
+import { rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
   closeSessionTab,
+  ensureSessionTab,
   openSessions,
+  retargetSessionTabs,
   setActiveSession,
   setTheme,
   theme,
@@ -68,6 +71,138 @@ export default function Titlebar() {
   // 状态浮层数据源：当前会话所属工作区，回退到首页选中项
   const statusWsId = () => currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
 
+  // 标签溢出与「已存在会话」选择器
+  let stripRef: HTMLDivElement | undefined
+  let searchRef: HTMLInputElement | undefined
+  const [canLeft, setCanLeft] = createSignal(false)
+  const [canRight, setCanRight] = createSignal(false)
+  const [tabsMenu, setTabsMenu] = createSignal(false)
+  const [pickerOpen, setPickerOpen] = createSignal(false)
+  const [pickerLoading, setPickerLoading] = createSignal(false)
+  const [pickerError, setPickerError] = createSignal("")
+  const [pickerSessions, setPickerSessions] = createSignal<Session[]>([])
+  const [pickerQuery, setPickerQuery] = createSignal("")
+  const [pickerWsId, setPickerWsId] = createSignal("")
+
+  const filteredSessions = createMemo(() => {
+    const query = pickerQuery().trim().toLowerCase()
+    if (!query) return pickerSessions()
+    return pickerSessions().filter((session) => (session.title || "Untitled").toLowerCase().includes(query))
+  })
+
+  /**
+   * updateScrollState
+   * 参数：无
+   * 核心流程：根据标签条滚动位置计算左右是否还有被裁掉的标签，
+   *           驱动左右滚动按钮的显隐
+   */
+  function updateScrollState() {
+    const el = stripRef
+    if (!el) return
+    setCanLeft(el.scrollLeft > 2)
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2)
+  }
+
+  /**
+   * scrollTabs
+   * 参数：delta 滚动增量（负左正右）
+   * 核心流程：平滑横向滚动标签条
+   */
+  function scrollTabs(delta: number) {
+    stripRef?.scrollBy({ left: delta, behavior: "smooth" })
+  }
+
+  // 标签增删后重新计算溢出状态（DOM 更新后测量）
+  createEffect(() => {
+    openSessions()
+    queueMicrotask(updateScrollState)
+  })
+
+  /**
+   * ensureLiveWorkspace
+   * 参数：path 项目路径；fallbackId 标签里记录的 workspace id
+   * 核心流程：当前选中的工作区路径一致时直接复用；
+   *           否则按路径重建/幂等获取工作区，并批量刷新同路径标签的 id
+   */
+  async function ensureLiveWorkspace(path: string | undefined, fallbackId: string | undefined): Promise<string | undefined> {
+    const current = selectedWorkspace()
+    if (path && current?.path === path) return current.id
+    if (path) {
+      try {
+        const ws = await createWorkspace({ path })
+        rememberWorkspace(ws)
+        setSelectedWorkspace(ws)
+        retargetSessionTabs(path, ws.id)
+        return ws.id
+      } catch {
+        // 路径已不可用：退回标签记录的 id，由会话页给出具体错误
+      }
+    }
+    return fallbackId
+  }
+
+  /**
+   * togglePicker
+   * 参数：无
+   * 核心流程：打开「选择已有会话」浮层 → 解析当前工作区 → 拉取会话列表并按更新时间倒序
+   */
+  async function togglePicker() {
+    if (pickerOpen()) {
+      setPickerOpen(false)
+      return
+    }
+    const fallback = currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
+    const path = selectedWorkspace()?.path ?? currentTab()?.projectPath
+    if (!fallback && !path) {
+      navigate("/")
+      return
+    }
+    setPickerOpen(true)
+    setPickerLoading(true)
+    setPickerError("")
+    setPickerQuery("")
+    setPickerSessions([])
+    try {
+      const wsId = await ensureLiveWorkspace(path, fallback)
+      if (!wsId) throw new Error("Workspace unavailable")
+      setPickerWsId(wsId)
+      const list = await listSessions(wsId)
+      setPickerSessions([...list].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)))
+    } catch (err) {
+      setPickerError(err instanceof Error ? err.message : "Failed to load sessions")
+    }
+    setPickerLoading(false)
+    queueMicrotask(() => searchRef?.focus())
+  }
+
+  /**
+   * openExisting
+   * 参数：session 从选择器里挑中的会话
+   * 核心流程：登记标签（保留项目路径）→ 关闭浮层 → 跳转会话页
+   */
+  function openExisting(session: Session) {
+    const wsId = pickerWsId()
+    if (!wsId) return
+    const path = selectedWorkspace()?.path ?? currentTab()?.projectPath
+    const tab: ActiveSession = {
+      id: session.id,
+      title: session.title || "Untitled",
+      workspaceId: wsId,
+      projectPath: path,
+    }
+    ensureSessionTab(tab)
+    setPickerOpen(false)
+    navigate(sessionUrl(tab))
+  }
+
+  onMount(() => {
+    const el = stripRef
+    if (!el) return
+    const observer = new ResizeObserver(updateScrollState)
+    observer.observe(el)
+    onCleanup(() => observer.disconnect())
+  })
+
   onMount(() => {
     // 首次探测 + 每 5s 轮询，结果驱动状态圆点颜色
     let timer: ReturnType<typeof setInterval> | undefined
@@ -88,19 +223,22 @@ export default function Titlebar() {
    * 核心流程：确定 workspace → POST 新建会话 → 跳转会话页；失败静默回首页
    */
   async function handleNewSession() {
-    const wsId = currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
-    if (!wsId || creating()) {
+    const fallback = currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
+    const path = selectedWorkspace()?.path ?? currentTab()?.projectPath
+    if ((!fallback && !path) || creating()) {
       navigate("/")
       return
     }
     setCreating(true)
     try {
-      // 新建会话：成功后进入新会话，由会话页追加标签
+      // 新建会话：先解析当前有效工作区，成功后进入新会话，由会话页追加标签
+      const wsId = await ensureLiveWorkspace(path, fallback)
+      if (!wsId) throw new Error("Workspace unavailable")
       const created = await createSession(wsId)
-      navigate(sessionUrl({ id: created.id, title: "Untitled", workspaceId: wsId }))
+      navigate(sessionUrl({ id: created.id, title: "Untitled", workspaceId: wsId, projectPath: path }))
     } catch {
       // 新建失败：回到首页由页面给出可见错误
-      navigate(`/w/${encodeURIComponent(wsId)}`)
+      navigate("/")
     }
     setCreating(false)
   }
@@ -108,11 +246,14 @@ export default function Titlebar() {
   /**
    * openTab
    * 参数：tab 目标会话标签
-   * 核心流程：设为当前会话并跳转到对应会话页
+   * 核心流程：先按项目路径解析当前有效 workspace（服务端重启后 id 会变）→
+   *           设为当前会话并跳转到对应会话页
    */
-  function openTab(tab: ActiveSession) {
-    setActiveSession(tab)
-    navigate(sessionUrl(tab))
+  async function openTab(tab: ActiveSession) {
+    const wsId = await ensureLiveWorkspace(tab.projectPath, tab.workspaceId)
+    const target = { ...tab, workspaceId: wsId ?? tab.workspaceId }
+    setActiveSession(target)
+    navigate(sessionUrl(target))
   }
 
   /**
@@ -131,7 +272,7 @@ export default function Titlebar() {
 
   return (
     <header class="flex h-9 shrink-0 flex-row items-center justify-between gap-2 border-b border-edge bg-deep pl-1.5 pr-2">
-      <div class="flex min-w-0 flex-1 items-center gap-1">
+      <div class="relative flex min-w-0 flex-1 items-center gap-1">
         {/* 主页按钮：图标按钮，回到首页 */}
         <button
           type="button"
@@ -152,8 +293,27 @@ export default function Titlebar() {
           <span class="truncate px-1 text-[13px] font-semibold text-text">Crush</span>
         </Show>
 
+        {/* 标签溢出时提供左右滚动，避免被隐藏的标签点不到 */}
+        <Show when={canLeft()}>
+          <button
+            type="button"
+            aria-label="Scroll tabs left"
+            title="Scroll tabs left"
+            class="flex size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-raised hover:text-text"
+            onClick={() => scrollTabs(-240)}
+          >
+            <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="m10 4-4 4 4 4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </Show>
+
         {/* 多会话标签：横向滚动，点击切换，关闭后自动跳到相邻标签 */}
-        <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div
+          ref={stripRef}
+          onScroll={updateScrollState}
+          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
           <For each={openSessions()}>
             {(tab) => (
               <div
@@ -170,7 +330,7 @@ export default function Titlebar() {
                   title={tab.title}
                   aria-label={`Open ${tab.title || "Untitled"}`}
                   aria-current={currentSessionId() === tab.id ? "page" : undefined}
-                  onClick={() => openTab(tab)}
+                  onClick={() => void openTab(tab)}
                 >
                   <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
                     C
@@ -193,6 +353,76 @@ export default function Titlebar() {
           </For>
         </div>
 
+        <Show when={canRight()}>
+          <button
+            type="button"
+            aria-label="Scroll tabs right"
+            title="Scroll tabs right"
+            class="flex size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-raised hover:text-text"
+            onClick={() => scrollTabs(240)}
+          >
+            <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="m6 4 4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </Show>
+
+        {/* 全部标签：溢出时也能从菜单里选择或关闭 */}
+        <Show when={canLeft() || canRight() || openSessions().length > 4}>
+          <button
+            type="button"
+            aria-label="All tabs"
+            title="All tabs"
+            aria-expanded={tabsMenu()}
+            class="flex size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-raised hover:text-text"
+            onClick={() => setTabsMenu((value) => !value)}
+          >
+            <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="m4 6 4 4 4-4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <Show when={tabsMenu()}>
+            <div class="fixed inset-0 z-40" onClick={() => setTabsMenu(false)} />
+            <div class="absolute top-8 right-2 z-50 w-72 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl">
+              <div class="border-b border-edge px-2.5 py-1.5 text-[10px] font-semibold tracking-wide text-faint uppercase">
+                Open tabs
+              </div>
+              <div class="max-h-72 overflow-y-auto py-1">
+                <For each={openSessions()}>
+                  {(tab) => (
+                    <div class="flex items-center gap-1 px-1">
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 items-center rounded-[4px] px-2 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                        classList={{ "bg-raised text-text": currentSessionId() === tab.id }}
+                        onClick={() => {
+                          setTabsMenu(false)
+                          void openTab(tab)
+                        }}
+                      >
+                        <span class="min-w-0 flex-1 truncate">{tab.title || "Untitled"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Close ${tab.title || "Untitled"}`}
+                        class="flex size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-edge-strong hover:text-text"
+                        onClick={() => {
+                          setTabsMenu(false)
+                          closeTab(tab)
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke-linecap="round" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+        </Show>
+
         {/* 新建会话：始终可用；无工作区时回首页 */}
         <button
           type="button"
@@ -206,6 +436,69 @@ export default function Titlebar() {
             <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
           </svg>
         </button>
+
+        {/* 打开已有会话：从当前项目历史会话中选择并作为标签打开 */}
+        <div class="relative">
+          <button
+            type="button"
+            aria-label="Open session"
+            title="Open session"
+            aria-expanded={pickerOpen()}
+            class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
+            onClick={() => void togglePicker()}
+          >
+            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.4">
+              <path d="M3 4.5h10M3 8h10M3 11.5h6" stroke-linecap="round" />
+            </svg>
+          </button>
+          <Show when={pickerOpen()}>
+            <div class="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
+            <div
+              class="absolute top-8 right-0 z-50 w-80 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setPickerOpen(false)
+              }}
+            >
+              <div class="border-b border-edge p-2">
+                <input
+                  ref={searchRef}
+                  id="session-search"
+                  name="session-search"
+                  value={pickerQuery()}
+                  onInput={(event) => setPickerQuery(event.currentTarget.value)}
+                  placeholder="Search sessions"
+                  class="w-full rounded-[6px] border border-edge bg-base px-2 py-1 text-[12px] text-text outline-none placeholder:text-faint focus:border-edge-strong"
+                />
+              </div>
+              <div class="max-h-72 overflow-y-auto py-1">
+                <Show when={pickerLoading()}>
+                  <div class="px-3 py-2 text-[11px] text-faint">Loading sessions…</div>
+                </Show>
+                <Show when={!pickerLoading() && pickerError()}>
+                  <div class="px-3 py-2 text-[11px] text-[#e5484d]">{pickerError()}</div>
+                </Show>
+                <Show when={!pickerLoading() && !pickerError() && filteredSessions().length === 0}>
+                  <div class="px-3 py-2 text-[11px] text-faint">No sessions</div>
+                </Show>
+                <For each={filteredSessions()}>
+                  {(session) => (
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                      onClick={() => openExisting(session)}
+                    >
+                      <span class="min-w-0 flex-1 truncate">{session.title || "Untitled"}</span>
+                      <Show when={currentSessionId() === session.id}>
+                        <span class="shrink-0 text-[10px] text-accent">current</span>
+                      </Show>
+                      <span class="shrink-0 text-[10px] text-faint">{session.message_count ?? 0}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+        </div>
       </div>
 
       <div class="flex shrink-0 items-center gap-1">

@@ -17,6 +17,7 @@ import { closeEvents, ensureEvents, eventsConnection, onEventsOpen, subscribeEve
 import { grantPermission, getSkip, setSkip, type PermissionAction, type PermissionRequest } from "../lib/permissions"
 import { answerQuestions, cancelQuestions, type QuestionRequest, type QuestionResponse } from "../lib/questions"
 import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type ToolResultPartData } from "../components/message/parts"
+import RunningIndicator from "../components/message/running-indicator"
 import { SubagentProvider, type SubagentStore } from "../components/message/subagent-context"
 import FileMention from "../components/file-mention"
 import ModelSelect from "../components/model-select"
@@ -26,8 +27,8 @@ import QuestionDock from "../components/question-dock"
 import SessionPanel from "../components/session-panel"
 import TodoDock from "../components/todo-dock"
 import type { QuestionItem } from "../components/panel-questions"
-import { ensureSessionTab, updateSessionTab } from "../lib/ui-store"
-import { recalledWorkspacePath, rememberWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import { ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
+import { recalledWorkspacePath, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import { createWorkspace } from "../lib/workspaces"
 import { childSessionId, loadSubagent } from "../lib/subagents"
 import type { FileEntry } from "../lib/files"
@@ -45,6 +46,42 @@ const PANEL_WIDTH_KEY = "crush.panel.width"
 
 /** 待办 Dock：折叠状态持久化键 */
 const TODOS_COLLAPSED_KEY = "crush.todos.collapsed"
+
+/** 图片附件：单条上限与数量上限（base64 会进入会话历史与 SSE，需限制体积） */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_IMAGES = 4
+
+/** 已粘贴/拖入的图片：base64 为发送用内容，previewUrl 为本地缩略图 */
+interface ImageAttachment {
+  id: string
+  name: string
+  mime: string
+  base64: string
+  previewUrl: string
+}
+
+/**
+ * readAsDataUrl
+ * 参数：file 浏览器 File 对象
+ * 核心流程：FileReader 读取为 data URL（onload 返回字符串，onerror 抛错）
+ */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ""))
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"))
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * imageFiles
+ * 参数：files 粘贴/拖拽得到的 File 列表
+ * 核心流程：过滤非图片文件，保持原顺序，供 addImages 校验与读取
+ */
+function imageFiles(files: FileList | File[]): File[] {
+  return [...files].filter((file) => file.type.startsWith("image/"))
+}
 
 /** 本地消息：在 proto.Message 基础上加 pending 标记（乐观插入、尚未被 SSE 真实消息替换） */
 type ChatMessage = TimelineMessage
@@ -172,6 +209,10 @@ export default function Session() {
   const [attachments, setAttachments] = createSignal<FileEntry[]>([])
   const [mentionOpen, setMentionOpen] = createSignal(false)
 
+  // 图片附件：粘贴/拖拽进入，以 base64 内联发送（无需落盘）；previewUrl 仅本地预览
+  const [images, setImages] = createSignal<ImageAttachment[]>([])
+  let imageSeq = 0
+
   // 权限 Dock：FIFO 队列，只渲染队首一条，处理完显示下一条
   const [permissionQueue, setPermissionQueue] = createSignal<PermissionRequest[]>([])
   const [permResponding, setPermResponding] = createSignal(false)
@@ -202,6 +243,8 @@ export default function Session() {
 
   // Composer 用量指示器：当前模型的 context_window，由 ModelSelect 加载/切换时上报
   const [modelContextWindow, setModelContextWindow] = createSignal<number>()
+  // 当前模型是否支持图片：undefined = 能力未知（不拦截），false = 明确不支持（发送前提示）
+  const [modelSupportsImages, setModelSupportsImages] = createSignal<boolean>()
 
   // 子 agent：按 child session id 缓存消息/会话信息，供 SubagentCard 展开与实时更新
   const [subagentMessages, setSubagentMessages] = createSignal<Record<string, SessionMessage[]>>({})
@@ -236,6 +279,84 @@ export default function Session() {
     setComposerToast(msg)
     if (toastTimer) clearTimeout(toastTimer)
     toastTimer = setTimeout(() => setComposerToast(""), 2500)
+  }
+
+  /**
+   * addImages
+   * 参数：files 粘贴或拖拽得到的 File 列表
+   * 核心流程：过滤非图片 → 逐张校验数量/体积 → FileReader 转 data URL →
+   *           去掉 data: 前缀得到 base64 入队；被拒绝的图片给出一次性提示
+   */
+  async function addImages(files: File[]) {
+    for (const file of imageFiles(files)) {
+      if (images().length >= MAX_IMAGES) {
+        showComposerToast(`最多附加 ${MAX_IMAGES} 张图片`)
+        break
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        showComposerToast(`${file.name || "图片"} 超过 10 MB，已跳过`)
+        continue
+      }
+      try {
+        const dataUrl = await readAsDataUrl(file)
+        const comma = dataUrl.indexOf(",")
+        const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : ""
+        if (!base64) continue
+        setImages((prev) =>
+          prev.length >= MAX_IMAGES
+            ? prev
+            : [
+                ...prev,
+                {
+                  id: `image-${++imageSeq}`,
+                  name: file.name || `image-${imageSeq}.${file.type.split("/")[1] || "png"}`,
+                  mime: file.type || "image/png",
+                  base64,
+                  previewUrl: dataUrl,
+                },
+              ],
+        )
+      } catch {
+        showComposerToast("图片读取失败")
+      }
+    }
+  }
+
+  /**
+   * handleComposerPaste
+   * 参数：e 粘贴事件
+   * 核心流程：从 clipboardData.items 取图片文件；有图片才阻止默认粘贴（保留文本粘贴）
+   */
+  function handleComposerPaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const files: File[] = []
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (!files.length) return
+    e.preventDefault()
+    void addImages(files)
+  }
+
+  /**
+   * handleComposerDrop
+   * 参数：e 拖放事件
+   * 核心流程：仅接管图片文件，阻止浏览器直接打开；非图片拖放保持默认行为
+   */
+  function handleComposerDrop(e: DragEvent) {
+    const files = e.dataTransfer?.files
+    if (!files || imageFiles(files).length === 0) return
+    e.preventDefault()
+    void addImages([...files])
+  }
+
+  /** handleComposerDragOver：拖入文件时阻止默认打开行为，允许 drop 触发 */
+  function handleComposerDragOver(e: DragEvent) {
+    if (e.dataTransfer?.types.includes("Files")) e.preventDefault()
   }
 
   // textarea 自适应高度：草稿变化时先复位再按内容撑开，钳制在 240px 内（超出滚动）
@@ -273,26 +394,29 @@ export default function Session() {
   async function loadSession(wsId: string, sid: string) {
     setState("loading")
     setError("")
-    // 标题栏标签页：会话切换时先占位，拿到真实标题后再更新
-    ensureSessionTab({ id: sid, title: "Untitled", workspaceId: wsId })
+    // 标题栏标签页：会话切换时先占位并带上项目路径，服务端重启后可按路径恢复
+    const existingTab = openSessions().find((tab) => tab.id === sid)
+    const projectPath = selectedWorkspace()?.id === wsId ? selectedWorkspace()?.path : existingTab?.projectPath
+    ensureSessionTab({ id: sid, title: "Untitled", workspaceId: wsId, projectPath })
     try {
       const data = await getSession(wsId, sid)
       if (params.sessionId !== sid) return
       setSession(data)
       setBusy(data.is_busy)
-      updateSessionTab({ id: data.id, title: data.title || "Untitled", workspaceId: wsId })
+      updateSessionTab({ id: data.id, title: data.title || "Untitled", workspaceId: wsId, projectPath })
       setState("ready")
     } catch (err) {
       if (params.sessionId !== sid) return
       const msg = errorMessage(err)
-      // 服务端重启后 workspace 已不在内存：按持久化路径重建并跳到新 id
+      // 服务端重启后 workspace 已不在内存：优先按标签里的项目路径重建并跳到新 id
       if (/workspace not found/i.test(msg)) {
-        const path = recalledWorkspacePath()
+        const path = existingTab?.projectPath ?? recalledWorkspacePath()
         if (path) {
           try {
             const ws = await createWorkspace({ path })
             rememberWorkspace(ws)
             setSelectedWorkspace(ws)
+            retargetSessionTabs(path, ws.id)
             navigate(`/w/${encodeURIComponent(ws.id)}/session/${encodeURIComponent(sid)}`, { replace: true })
             return
           } catch {
@@ -857,6 +981,13 @@ export default function Session() {
     const text = draft().trim()
     if (!wsId || !sid || !text || busy() || sending() || agentState() !== "ready") return
 
+    // 模型明确不支持图片时直接拦截：后端 preparePrompt 会静默丢弃图片附件
+    const pendingImages = images()
+    if (pendingImages.length > 0 && modelSupportsImages() === false) {
+      showComposerToast("当前模型不支持图片，请切换到支持视觉的模型")
+      return
+    }
+
     // 斜杠命令：/compact 直接触发压缩，不进消息流
     if (text === "/compact") {
       setDraft("")
@@ -877,7 +1008,14 @@ export default function Session() {
       id: `pending-${++pendingSeq}`,
       role: "user",
       session_id: sid,
-      parts: [{ type: "text", data: { text } }],
+      parts: [
+        { type: "text", data: { text } },
+        // 图片先以本地 base64 插入，SSE 真实消息到达后按文本匹配替换
+        ...pendingImages.map((img) => ({
+          type: "binary",
+          data: { Path: "", MIMEType: img.mime, Data: img.base64 },
+        })),
+      ],
       model: "",
       provider: "",
       created_at: now,
@@ -888,17 +1026,25 @@ export default function Session() {
 
     try {
       // 发送 prompt：202 即受理，assistant 输出经 SSE message 事件逐步推送；
-      // 附件只传相对路径，内容由后端读取
+      // @ 文件只传路径由后端读取；粘贴图片直接内联 base64（磁盘上无文件）
       await sendMessage(wsId, {
         session_id: sid,
         prompt: text,
         run_id: newRunId(),
-        attachments: attachments().map((f) => ({
-          file_path: f.path,
-          file_name: f.is_dir ? `${f.name}/` : f.name,
-        })),
+        attachments: [
+          ...attachments().map((f) => ({
+            file_path: f.path,
+            file_name: f.is_dir ? `${f.name}/` : f.name,
+          })),
+          ...pendingImages.map((img) => ({
+            file_name: img.name,
+            mime_type: img.mime,
+            content: img.base64,
+          })),
+        ],
       })
       setAttachments([])
+      setImages([])
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
       setDraft(text)
@@ -999,6 +1145,7 @@ export default function Session() {
         // 切换会话：清空本地 Dock 队列与提交态，避免旧会话的请求串台
         resetDocks()
         setAttachments([])
+        setImages([])
         setMentionOpen(false)
         setActiveQuestionId("")
         setHighlightedMessageId("")
@@ -1034,6 +1181,15 @@ export default function Session() {
   })
 
   const title = () => session()?.title || "Untitled"
+
+  // 运行指示：busy 且最后一条不是"正在流式的 assistant"时显示在时间线底部；
+  // assistant 已开始流式后由消息自身的底部指示器接管，避免出现两条
+  const showTurnIndicator = createMemo(() => {
+    if (!busy()) return false
+    const list = messages()
+    const last = list[list.length - 1]
+    return !(last?.role === "assistant" && !last.parts.some((p) => p.type === "finish"))
+  })
 
   // 问答索引：从时间线提取非空 user 问句，answered 表示下一条 user 之前已有 assistant 输出
   const questions = createMemo<QuestionItem[]>(() => {
@@ -1181,6 +1337,12 @@ export default function Session() {
                         </div>
                       )}
                     </For>
+                    {/* 等待首个 assistant 消息时：在时间线底部展示运行中字符带 */}
+                    <Show when={showTurnIndicator()}>
+                      <div class="px-1 py-2">
+                        <RunningIndicator />
+                      </div>
+                    </Show>
                   </SubagentProvider>
                 </Show>
               </div>
@@ -1279,7 +1441,12 @@ export default function Session() {
                   </div>
                 </Show>
                 {/* opencode 版式 Composer：rounded-xl、min-h 96px、pt 12px；底部行 = 左侧 + / 模型选择器，右侧圆形发送 */}
-                <div class="relative flex min-h-[96px] flex-col rounded-xl border border-edge bg-deep pt-3 transition-colors focus-within:border-edge-strong">
+                <div
+                  class="relative flex min-h-[96px] flex-col rounded-xl border border-edge bg-deep pt-3 transition-colors focus-within:border-edge-strong"
+                  onPaste={handleComposerPaste}
+                  onDragOver={handleComposerDragOver}
+                  onDrop={handleComposerDrop}
+                >
                   {/* @ 文件引用浮层：选择文件后作为附件随 prompt 发送 */}
                   <Show when={mentionOpen()}>
                     <FileMention
@@ -1330,6 +1497,31 @@ export default function Session() {
                       </For>
                     </div>
                   </Show>
+                  {/* 图片 chips：粘贴/拖拽得到，展示缩略图与文件名，可单个移除 */}
+                  <Show when={images().length > 0}>
+                    <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                      <For each={images()}>
+                        {(img) => (
+                          <div class="relative flex max-w-[200px] items-center gap-1.5 rounded-md border border-edge bg-raised p-1 pr-1.5 text-[11px] text-muted">
+                            <img
+                              src={img.previewUrl}
+                              alt={img.name}
+                              class="size-8 shrink-0 rounded object-cover"
+                            />
+                            <span class="min-w-0 truncate">{img.name}</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${img.name}`}
+                              class="shrink-0 rounded-[3px] px-0.5 text-faint hover:bg-edge hover:text-text"
+                              onClick={() => setImages((prev) => prev.filter((x) => x.id !== img.id))}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <textarea
                     ref={draftRef}
                     value={draft()}
@@ -1375,7 +1567,10 @@ export default function Session() {
                       <ModelSelect
                         wsId={params.workspaceId}
                         onToast={showComposerToast}
-                        onModelChange={(_model, contextWindow) => setModelContextWindow(contextWindow)}
+                        onModelChange={(_model, contextWindow, supportsImages) => {
+                          setModelContextWindow(contextWindow)
+                          setModelSupportsImages(supportsImages)
+                        }}
                       />
                       {/* 用量指示器：生成中实时 tok/s，右侧为当前上下文占窗口百分比 */}
                       <UsageMeter

@@ -58,10 +58,53 @@ export interface ActiveSession {
   id: string
   title: string
   workspaceId: string
+  /** 项目路径：workspace id 是服务端内存态，重启后按路径重新解析 */
+  projectPath?: string
 }
 
-/** 已打开的会话标签：按打开顺序保存，同一 session 不重复 */
-const [openSessions, setOpenSessions] = createSignal<ActiveSession[]>([])
+const TABS_KEY = "crush.tabs"
+const MAX_TABS = 20
+
+/**
+ * readSessionTabs
+ * 参数：无
+ * 核心流程：从 localStorage 恢复标签；丢弃缺少 id 的脏数据，限制数量避免无限增长
+ */
+function readSessionTabs(): ActiveSession[] {
+  try {
+    const raw = localStorage.getItem(TABS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((tab) => typeof tab.id === "string" && tab.id !== "")
+      .slice(0, MAX_TABS)
+      .map((tab) => ({
+        id: tab.id as string,
+        title: typeof tab.title === "string" && tab.title ? tab.title : "Untitled",
+        workspaceId: typeof tab.workspaceId === "string" ? tab.workspaceId : "",
+        projectPath: typeof tab.projectPath === "string" && tab.projectPath ? tab.projectPath : undefined,
+      }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * persistSessionTabs
+ * 参数：tabs 当前标签列表
+ * 核心流程：写入 localStorage；存储失败时仅本次页面生效
+ */
+function persistSessionTabs(tabs: ActiveSession[]) {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify(tabs))
+  } catch {
+    // localStorage 不可用：跳过持久化
+  }
+}
+
+/** 已打开的会话标签：初始化时从 localStorage 恢复，同一 session 不重复 */
+const [openSessions, setOpenSessions] = createSignal<ActiveSession[]>(readSessionTabs())
 const [activeSession, setActiveSession] = createSignal<ActiveSession>()
 
 export { activeSession, openSessions, setActiveSession }
@@ -73,15 +116,37 @@ export { activeSession, openSessions, setActiveSession }
  *           同时把该标签设为当前会话（用于路由进入新会话）
  */
 export function ensureSessionTab(tab: ActiveSession) {
-  const existing = openSessions().find((item) => item.id === tab.id)
+  let next = openSessions()
   setOpenSessions((prev) => {
-    if (existing && existing.workspaceId === tab.workspaceId) return prev
-    if (!existing) return [...prev, tab]
-    return prev.map((item) => (item.id === tab.id ? { ...item, workspaceId: tab.workspaceId } : item))
+    const existing = prev.find((item) => item.id === tab.id)
+    if (!existing) {
+      next = [...prev, tab].slice(0, MAX_TABS)
+    } else {
+      // 已有标签保留真实标题，只同步工作区与项目路径
+      const merged: ActiveSession = {
+        ...existing,
+        ...tab,
+        title: tab.title && tab.title !== "Untitled" ? tab.title : existing.title,
+        projectPath: tab.projectPath ?? existing.projectPath,
+      }
+      const changed =
+        merged.title !== existing.title ||
+        merged.workspaceId !== existing.workspaceId ||
+        merged.projectPath !== existing.projectPath
+      next = changed ? prev.map((item) => (item.id === tab.id ? merged : item)) : prev
+    }
+    persistSessionTabs(next)
+    return next
   })
   setActiveSession((prev) => {
-    const base = prev?.id === tab.id ? prev : existing
-    return base ? { ...base, workspaceId: tab.workspaceId } : tab
+    const base = prev?.id === tab.id ? prev : next.find((item) => item.id === tab.id)
+    if (!base) return tab
+    return {
+      ...base,
+      workspaceId: tab.workspaceId || base.workspaceId,
+      projectPath: tab.projectPath ?? base.projectPath,
+      title: tab.title && tab.title !== "Untitled" ? tab.title : base.title,
+    }
   })
 }
 
@@ -93,12 +158,19 @@ export function ensureSessionTab(tab: ActiveSession) {
 export function updateSessionTab(tab: ActiveSession) {
   setOpenSessions((prev) => {
     const index = prev.findIndex((item) => item.id === tab.id)
-    if (index === -1) return [...prev, tab]
-    const next = [...prev]
-    next[index] = { ...next[index], ...tab }
+    let next: ActiveSession[]
+    if (index === -1) {
+      next = [...prev, tab].slice(0, MAX_TABS)
+    } else {
+      next = [...prev]
+      next[index] = { ...next[index], ...tab, projectPath: tab.projectPath ?? next[index].projectPath }
+    }
+    persistSessionTabs(next)
     return next
   })
-  setActiveSession((prev) => (prev?.id === tab.id ? { ...prev, ...tab } : prev))
+  setActiveSession((prev) =>
+    prev?.id === tab.id ? { ...prev, ...tab, projectPath: tab.projectPath ?? prev.projectPath } : prev,
+  )
 }
 
 /**
@@ -113,8 +185,27 @@ export function closeSessionTab(id: string): ActiveSession | undefined {
     const index = prev.findIndex((item) => item.id === id)
     if (index === -1) return prev
     nextActive = prev[index + 1] ?? prev[index - 1]
-    return prev.filter((item) => item.id !== id)
+    const next = prev.filter((item) => item.id !== id)
+    persistSessionTabs(next)
+    return next
   })
   setActiveSession((prev) => (prev?.id === id ? nextActive : prev))
   return nextActive
+}
+
+/**
+ * retargetSessionTabs
+ * 参数：projectPath 项目路径；workspaceId 当前有效的 workspace id
+ * 核心流程：服务端重启后 workspace id 全部失效，按路径把同项目的标签批量指向新 id，
+ *           避免每个标签各自重建
+ */
+export function retargetSessionTabs(projectPath: string, workspaceId: string) {
+  if (!projectPath || !workspaceId) return
+  setOpenSessions((prev) => {
+    if (!prev.some((item) => item.projectPath === projectPath && item.workspaceId !== workspaceId)) return prev
+    const next = prev.map((item) => (item.projectPath === projectPath ? { ...item, workspaceId } : item))
+    persistSessionTabs(next)
+    return next
+  })
+  setActiveSession((prev) => (prev && prev.projectPath === projectPath ? { ...prev, workspaceId } : prev))
 }

@@ -16,6 +16,8 @@ export interface ProviderModel {
   can_reason?: boolean
   reasoning_levels?: string[]
   default_reasoning_effort?: string
+  /** catwalk.SupportImages 的 JSON 名；true 表示模型可接收图片附件 */
+  supports_attachments?: boolean
 }
 
 /** 对应 catwalk.Provider：id/name + 模型列表（下拉按 provider 分组渲染） */

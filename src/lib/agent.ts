@@ -19,10 +19,16 @@ export interface AgentInfo {
   model_cfg: { model?: string; provider?: string; reasoning_effort?: string }
 }
 
-/** 附件引用：后端按 file_path 读取内容（见 backend/files.go），前端只需传路径 */
+/**
+ * 附件：两种传法 —
+ *   1. @ 文件引用：只传 file_path，后端按路径读取（见 backend/files.go）
+ *   2. 粘贴/拖拽图片：传 mime_type + content（base64，不含 data: 前缀），无需落盘
+ */
 export interface AgentAttachment {
-  file_path: string
+  file_path?: string
   file_name?: string
+  mime_type?: string
+  content?: string
 }
 
 /** POST /agent 请求体，对应 proto.AgentMessage（后端只解码需要的字段） */
