@@ -54,8 +54,9 @@ SSE 代理已关闭响应缓冲（`selfHandleResponse` + 立即 flush 响应头�
 - LaTeX：支持 `$...$`、`$$...$$`、`\(...\)`、`\[...\]`，KaTeX 在 DOMPurify 之后渲染，语法错误回退源码
 - Mermaid：`mermaid` 代码块按需加载渲染 SVG（流式结束后才渲染），支持图表/源码切换与语法错误降级
 - 聊天主链路：历史加载、乐观发送、SSE 增量更新、Stop 中断、run_complete 收敛
-- 会话压缩：标题栏 Compact 按钮或输入 `/compact`，生成摘要并把历史折叠为可展开的摘要卡片
+- 会话压缩：标题栏 Compact 按钮或输入 `/compact`，生成摘要并把历史折叠为默认展开、限高 10 行的摘要卡片（可 Show more 查看全文）
 - 子 agent 卡片：任务标题、运行状态与耗时、实时 Activity 工具树、Markdown 结果、模型与 token 用量；Task/Result 默认只展示前 10 行（带渐隐与 Show more），避免长内容刷屏
+- 长内容限高：正文代码块、Thinking、工具输入/输出与 Shell 输出超过 10 行时默认折叠预览（渐隐 + Show more），展开后限高滚动；流式代码块保持全文避免跳动
 - 待办 Dock：输入区上方展示会话 todo 完成进度与列表，可折叠，按 parent 缩进；随 SSE session 事件实时更新
 - 用量指示器：Composer 底部显示生成中实时 `tok/s`（1s 窗口平滑估算，完成后回退服务端记账速率）与上下文占窗口百分比（随 session SSE 更新）
 - 权限 Dock：Allow once / Allow for session / Deny；YOLO 开关
@@ -94,6 +95,7 @@ src/
     message/parts.tsx          消息分片渲染
     message/markdown.tsx       Markdown + 高亮
     message/tool-visuals.tsx   工具图标 / 摘要 / JSON 格式化
+    message/clamped-preview.tsx 通用 10 行限高预览（渐隐 + Show more）
     message/subagent-card.tsx  子 agent 卡片（Task / Activity / Result，10 行预览）
     message/subagent-context.tsx 子会话缓存 Context
   pages/home.tsx               首页

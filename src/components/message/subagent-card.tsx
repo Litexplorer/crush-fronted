@@ -10,7 +10,7 @@
  *           footer    模型与 token 用量
  *           展开时按 child session id 懒加载子会话历史
  */
-import { createEffect, createMemo, createSignal, Index, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, Index, Show } from "solid-js"
 import type { SessionMessage } from "../../lib/sessions"
 import { formatTokens } from "../../lib/usage"
 import {
@@ -21,6 +21,7 @@ import {
   type SubagentMeta,
 } from "../../lib/subagents"
 import { MarkdownText } from "./markdown"
+import { ClampedPreview } from "./clamped-preview"
 import { useSubagentStore } from "./subagent-context"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
 import type { ToolCallPartData, ToolResultPartData } from "./parts"
@@ -330,65 +331,10 @@ export default function SubagentCard(props: SubagentCardProps) {
  *          用 scrollHeight 实测溢出量，只有确实被裁掉时才给出展开按钮
  */
 function ClampedMarkdown(props: { text: string; lines?: number; tone?: "muted" | "text" | "error" }) {
-  const [expanded, setExpanded] = createSignal(false)
-  const [hiddenLines, setHiddenLines] = createSignal(0)
-  let contentEl: HTMLDivElement | undefined
-
-  const limit = () => props.lines ?? 10
-  const clamped = () => !expanded()
-
-  const measure = () => {
-    const el = contentEl
-    if (!el) return
-    setHiddenLines(Math.max(0, Math.ceil(el.scrollHeight / 20) - limit()))
-  }
-
-  // 文本或展开态变化后重新实测；异步渲染（Mermaid 等）通过 DOM 观察补齐
-  createEffect(() => {
-    props.text
-    expanded()
-    const el = contentEl
-    if (!el) return
-    measure()
-    const mutation = new MutationObserver(measure)
-    mutation.observe(el, { childList: true, subtree: true, characterData: true })
-    const resize = new ResizeObserver(measure)
-    if (el.firstElementChild) resize.observe(el.firstElementChild)
-    onCleanup(() => {
-      mutation.disconnect()
-      resize.disconnect()
-    })
-  })
-
   return (
-    <div>
-      <div
-        ref={contentEl}
-        class="relative overflow-hidden text-[12px] leading-5"
-        classList={{
-          "text-[#e5484d]": props.tone === "error",
-          "text-text": props.tone === "text",
-          "text-muted": props.tone === "muted",
-          "max-h-[200px]": clamped(),
-          "max-h-[420px] overflow-y-auto": !clamped(),
-        }}
-      >
-        <MarkdownText text={props.text} />
-        <Show when={clamped() && hiddenLines() > 0}>
-          <div class="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-base to-transparent" />
-        </Show>
-      </div>
-      <Show when={hiddenLines() > 0 || expanded()}>
-        <button
-          type="button"
-          class="mt-1 text-[11px] text-faint transition-colors hover:text-text"
-          aria-expanded={expanded()}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded() ? "Show less" : `Show more · +${hiddenLines()} lines`}
-        </button>
-      </Show>
-    </div>
+    <ClampedPreview lines={props.lines} lineHeight={20} tone={props.tone} class="text-[12px] leading-5">
+      <MarkdownText text={props.text} />
+    </ClampedPreview>
   )
 }
 
@@ -446,9 +392,13 @@ function SubagentToolRow(props: { call: ToolCallPartData; result?: ToolResultPar
       </button>
       <Show when={open()}>
         <div class="flex flex-col gap-1.5 border-t border-edge px-2 py-1.5">
-          <pre class="md-pre">{formatJson(props.call.input)}</pre>
+          <ClampedPreview lineHeight={18} offset={16}>
+            <pre class="md-pre">{formatJson(props.call.input)}</pre>
+          </ClampedPreview>
           <Show when={props.result?.content}>
-            <pre class="md-pre" classList={{ "text-[#e5484d]": failed() }}>{props.result?.content}</pre>
+            <ClampedPreview lineHeight={18} offset={16}>
+              <pre class="md-pre" classList={{ "text-[#e5484d]": failed() }}>{props.result?.content}</pre>
+            </ClampedPreview>
           </Show>
         </div>
       </Show>

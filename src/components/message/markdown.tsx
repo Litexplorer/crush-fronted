@@ -257,11 +257,26 @@ export function renderMarkdown(text: string): string {
 /**
  * handleMarkdownClick
  * 参数：e 冒泡到 md-body 的点击事件
- * 核心流程：命中调用链按钮 → 批量展开/折叠同组 details；
+ * 核心流程：命中代码块按钮 → 在 10 行预览与展开全文之间切换；
+ *           命中调用链按钮 → 批量展开/折叠同组 details；
  *           命中 Mermaid 源码按钮 → 在图表与源码之间切换
  */
 function handleMarkdownClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null
+
+  const codeToggle = target?.closest<HTMLElement>("[data-code-toggle]")
+  if (codeToggle) {
+    const pre = codeToggle.previousElementSibling
+    if (pre instanceof HTMLPreElement) {
+      const expanded = pre.dataset.codeClamp === "expanded"
+      pre.dataset.codeClamp = expanded ? "collapsed" : "expanded"
+      codeToggle.setAttribute("aria-expanded", String(!expanded))
+      codeToggle.textContent = expanded
+        ? `Show more · +${hiddenCodeLines(pre.scrollHeight)} lines`
+        : "Show less"
+    }
+    return
+  }
 
   const mermaidAction = target?.closest<HTMLElement>("[data-mermaid-action]")
   if (mermaidAction) {
@@ -280,6 +295,44 @@ function handleMarkdownClick(e: MouseEvent) {
   const open = action.dataset.callchainAction === "expand"
   root.querySelectorAll("details").forEach((item) => {
     if (item instanceof HTMLDetailsElement) item.open = open
+  })
+}
+
+/** 正文代码块预览行数与行高（12px * 1.55），与 index.css 的 max-height 保持一致 */
+const CODE_PREVIEW_LINES = 10
+const CODE_LINE_HEIGHT = 18.6
+const CODE_PREVIEW_HEIGHT = 206
+
+/**
+ * hiddenCodeLines
+ * 参数：height 代码块完整高度
+ * 核心流程：扣掉上下 padding 后按行高估算被裁掉的行数，至少为 1
+ */
+function hiddenCodeLines(height: number): number {
+  return Math.max(1, Math.ceil((height - 20) / CODE_LINE_HEIGHT) - CODE_PREVIEW_LINES)
+}
+
+/**
+ * applyCodeClamps
+ * 参数：root Markdown 根节点；streaming 是否仍在流式输出
+ * 核心流程：流式期间保持全文避免每帧跳动；完成后对超过 10 行的代码块
+ *          标记 collapsed，并在其后插入 Show more 按钮
+ */
+function applyCodeClamps(root: HTMLElement, streaming: boolean) {
+  root.querySelectorAll<HTMLButtonElement>("[data-code-toggle]").forEach((button) => button.remove())
+  root.querySelectorAll<HTMLPreElement>("pre.md-code").forEach((pre) => {
+    pre.removeAttribute("data-code-clamp")
+    if (streaming) return
+    const full = pre.scrollHeight
+    if (full <= CODE_PREVIEW_HEIGHT + 2) return
+    pre.dataset.codeClamp = "collapsed"
+    const toggle = document.createElement("button")
+    toggle.type = "button"
+    toggle.dataset.codeToggle = "1"
+    toggle.className = "md-code-toggle"
+    toggle.setAttribute("aria-expanded", "false")
+    toggle.textContent = `Show more · +${hiddenCodeLines(full)} lines`
+    pre.insertAdjacentElement("afterend", toggle)
   })
 }
 
@@ -392,6 +445,7 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
           if (seq !== renderSeq || !root.isConnected) return
           resetMermaidBlocks(root)
           renderMathBlocks(root)
+          applyCodeClamps(root, streaming)
           if (streaming) return
           void renderMermaidBlocks(root, seq, currentTheme)
         })

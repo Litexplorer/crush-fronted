@@ -16,6 +16,7 @@ import type { ContentPart, SessionMessage } from "../../lib/sessions"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
 import SubagentCard from "./subagent-card"
+import { ClampedPreview } from "./clamped-preview"
 import { useSubagentStore } from "./subagent-context"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
 
@@ -146,7 +147,7 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
  *           尚无 finish 分片时显示 Summarizing，提示压缩仍在进行
  */
 function SummaryMessage(props: { message: TimelineMessage }) {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(true)
   const streaming = createMemo(() => !props.message.parts.some((p) => p.type === "finish"))
   const texts = createMemo(() =>
     props.message.parts
@@ -186,7 +187,9 @@ function SummaryMessage(props: { message: TimelineMessage }) {
       <Show when={open()}>
         <div class="border-t border-edge px-3 py-2 text-[13px] leading-5">
           <Show when={texts().length > 0} fallback={<span class="text-[12px] text-faint">No summary yet.</span>}>
-            <For each={texts()}>{(text) => <MarkdownText text={text} streaming={streaming()} />}</For>
+            <ClampedPreview lines={10} lineHeight={20} class="text-[13px] leading-5">
+              <For each={texts()}>{(text) => <MarkdownText text={text} streaming={streaming()} />}</For>
+            </ClampedPreview>
           </Show>
         </div>
       </Show>
@@ -379,8 +382,17 @@ function ReasoningBlock(props: { open: boolean; streaming: boolean; thinking: st
         </svg>
       </button>
       <Show when={props.open && props.thinking}>
-        <div class="max-h-[280px] overflow-y-auto border-t border-edge px-2.5 py-2 text-[12px] leading-[18px] whitespace-pre-wrap break-words text-muted">
-          {props.thinking}
+        <div class="border-t border-edge">
+          <ClampedPreview
+            lines={10}
+            lineHeight={18}
+            offset={16}
+            expandedMaxHeight={420}
+            tone="muted"
+            class="px-2.5 py-2 text-[12px] leading-[18px] whitespace-pre-wrap break-words"
+          >
+            {props.thinking}
+          </ClampedPreview>
         </div>
       </Show>
     </div>
@@ -436,10 +448,14 @@ function ToolCard(props: {
       <Show when={props.open && hasBody()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
           <Show when={props.inputRaw}>
-            <pre class="md-pre">{formatJson(props.inputRaw)}</pre>
+            <ClampedPreview lineHeight={18} offset={16}>
+              <pre class="md-pre">{formatJson(props.inputRaw)}</pre>
+            </ClampedPreview>
           </Show>
           <Show when={props.result?.content}>
-            <pre class="md-pre" classList={{ "text-[#e5484d]": hasError() }}>{props.result?.content}</pre>
+            <ClampedPreview lineHeight={18} offset={16}>
+              <pre class="md-pre" classList={{ "text-[#e5484d]": hasError() }}>{props.result?.content}</pre>
+            </ClampedPreview>
           </Show>
         </div>
       </Show>
@@ -460,7 +476,9 @@ function ShellCommandCard(props: { command: string; output: string }) {
         <span class="min-w-0 truncate">{props.command}</span>
       </div>
       <Show when={props.output}>
-        <pre class="md-pre border-t border-edge">{props.output}</pre>
+        <ClampedPreview lineHeight={18} offset={16}>
+          <pre class="md-pre border-t border-edge">{props.output}</pre>
+        </ClampedPreview>
       </Show>
     </div>
   )
