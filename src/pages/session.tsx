@@ -213,6 +213,8 @@ export default function Session() {
   const [messages, setMessages] = createSignal<ChatMessage[]>([])
   const [busy, setBusy] = createSignal(false)
   const [sending, setSending] = createSignal(false)
+  // 手动刷新：重新拉取会话详情与消息列表，期间按钮旋转并禁用
+  const [refreshing, setRefreshing] = createSignal(false)
   // 会话压缩：请求同步等待摘要生成，期间禁止发送并展示忙碌态
   const [compacting, setCompacting] = createSignal(false)
   const [agentState, setAgentState] = createSignal<AgentState>("checking")
@@ -497,6 +499,31 @@ export default function Session() {
       setAgentState(after.is_ready ? "ready" : "unready")
     } catch {
       setAgentState("unready")
+    }
+  }
+
+  /**
+   * refreshSession
+   * 参数：无（读取当前路由上的 workspace/session）
+   * 核心流程：清空滚动贴底与高亮定位态 → 重新拉取会话详情与消息列表 →
+   *           结束后释放按钮禁用；刷新失败由 loadSession 转入错误态
+   */
+  async function refreshSession() {
+    if (refreshing()) return
+    setRefreshing(true)
+    // 消息整表替换后旧定位失效：贴底、清空问答高亮与钉住行
+    stickToBottom = true
+    setActiveQuestionId("")
+    setHighlightedMessageId("")
+    setPinnedMessageId(undefined)
+    if (highlightTimer) clearTimeout(highlightTimer)
+    try {
+      await Promise.all([
+        loadSession(params.workspaceId, params.sessionId),
+        loadMessages(params.workspaceId, params.sessionId),
+      ])
+    } finally {
+      setRefreshing(false)
     }
   }
 
@@ -1492,6 +1519,29 @@ export default function Session() {
                 eventsConnection() === "connected" ? "var(--status-connected)" : "var(--status-disconnected)",
             }}
           />
+          {/* 刷新会话：重拉会话详情与消息；刷新期间图标旋转并禁用按钮 */}
+          <button
+            type="button"
+            aria-label="Refresh session"
+            title="Refresh session"
+            class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text disabled:cursor-default disabled:opacity-60"
+            disabled={refreshing()}
+            onClick={() => void refreshSession()}
+          >
+            <svg
+              viewBox="0 0 16 16"
+              class="size-4"
+              classList={{ "animate-spin": refreshing() }}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8" />
+              <path d="M13.4 2.8v2.9h-2.9" />
+            </svg>
+          </button>
           {/* 面板切换按钮：展开/折叠右侧面板，状态持久化 localStorage */}
           <button
             type="button"
