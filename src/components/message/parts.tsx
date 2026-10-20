@@ -11,16 +11,18 @@
  *           image_url/binary 图片缩略图（点击放大），非图片 binary 仍显示 [image] 占位
  *           finish          底部一行小字（结果 + 耗时）
  */
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import type { ContentPart, SessionMessage } from "../../lib/sessions"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
+import ViewCode, { parseViewData } from "./view-code"
+import BashBody, { parseBashData } from "./bash-card"
 import { useSubagentStore } from "./subagent-context"
 import RunningIndicator from "./running-indicator"
-import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
+import { formatJson, toolIcon, toolLabel, toolSummary, toolTone } from "./tool-visuals"
 
 /** 时间线消息：proto.Message + 乐观插入 pending 标记 */
 export type TimelineMessage = SessionMessage & { pending?: boolean }
@@ -402,9 +404,9 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
                 return ((p.data ?? {}) as ToolResultPartData).tool_call_id === tc.id
               })
               const inlineData = inlineResult ? ((inlineResult.data ?? {}) as ToolResultPartData) : undefined
-              // edit 结果在后续 tool 消息中：从会话级结果表补齐，避免调用与结果拆成两张卡片
-              const crossResult =
-                tc.id && defaultOpenTool(name) ? subagent?.toolResults().get(tc.id) : undefined
+              // 结果常落在后续 tool 消息里：统一从会话级结果表补齐，
+              // 否则 view/edit 这类需要 metadata 的卡片只能看到调用参数
+              const crossResult = tc.id ? subagent?.toolResults().get(tc.id) : undefined
               // agent 结果同样跨消息：从会话级结果表补齐，才能停掉转圈并展示最终答复
               const result =
                 name === "agent" && tc.id
@@ -462,9 +464,24 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
             }
             case "image_url":
             case "binary": {
-              // 图片渲染缩略图；非图片 binary（如文本附件）保持占位
+              // 图片渲染缩略图；文本/其他附件（@ 引用）渲染成文件名 chip，避免误标成图片
               const src = imageSrc(part)
-              return src ? <MessageImage src={src} /> : <div class="text-[12px] text-faint">[image]</div>
+              if (src) return <MessageImage src={src} />
+              const bin = data as BinaryPartData
+              const path = bin.Path ?? ""
+              const name = path.split("/").filter(Boolean).pop() ?? "attachment"
+              return (
+                <div
+                  class="flex max-w-[260px] items-center gap-1.5 rounded-[6px] border border-edge bg-raised/40 px-2 py-1 text-[12px] text-muted"
+                  title={path || name}
+                >
+                  <svg viewBox="0 0 16 16" class="size-3 shrink-0 text-faint" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M4 2.5h5l3 3v8H4z" stroke-linejoin="round" />
+                    <path d="M9 2.5v3h3" stroke-linejoin="round" />
+                  </svg>
+                  <span class="min-w-0 truncate">{name}</span>
+                </div>
+              )
             }
             case "finish": {
               // 仅最后一条消息展示结果行，且只认最后一个分片，避免多步 step 重复
@@ -559,7 +576,20 @@ function ToolCard(props: {
       ? parseEditDiff(props.inputRaw, props.result?.metadata)
       : undefined,
   )
-  const hasBody = () => !!props.inputRaw || !!props.result?.content || !!editDiff()
+  // view 展开时改用代码卡：文件路径 + 行号 + 高亮，metadata 缺失时回退解析 <file> 块
+  const viewData = createMemo(() =>
+    props.open && !hasError() && /^view$/i.test(props.name)
+      ? parseViewData(props.inputRaw, props.result?.metadata, props.result?.content)
+      : undefined,
+  )
+  // bash 展开时改用命令/输出双块：命令按 bash 高亮，输出单独成块
+  const bashData = createMemo(() =>
+    props.open && /^bash$/i.test(props.name)
+      ? parseBashData(props.inputRaw, props.result?.metadata, props.result?.content, hasError())
+      : undefined,
+  )
+  const hasBody = () =>
+    !!props.inputRaw || !!props.result?.content || !!editDiff() || !!viewData() || !!bashData()
   return (
     <div class="overflow-hidden rounded-[8px] border border-edge bg-base transition-colors hover:bg-raised/60">
       <button
@@ -571,7 +601,10 @@ function ToolCard(props: {
         <span classList={{ "text-[#e5484d]": hasError(), "text-faint": !hasError() }}>
           {toolIcon(props.name)}
         </span>
-        <span class="shrink-0 font-medium">{props.name}</span>
+        {/* 类型标识：按工具类别上色（Bash 绿 / Write 橙 / View 蓝 …） */}
+        <span class={`shrink-0 font-semibold ${hasError() ? "text-[#e5484d]" : toolTone(props.name)}`}>
+          {toolLabel(props.name)}
+        </span>
         <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{toolSummary(props.name, props.inputRaw)}</span>
         <Show when={!props.finished} fallback={
           <svg
@@ -590,9 +623,11 @@ function ToolCard(props: {
       </button>
       <Show when={props.open && hasBody()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
-          <Show
-            when={editDiff()}
-            fallback={
+          <Switch>
+            <Match when={viewData()}>{(data) => <ViewCode data={data()} />}</Match>
+            <Match when={bashData()}>{(data) => <BashBody data={data()} />}</Match>
+            <Match when={editDiff()}>{(diff) => <EditDiff data={diff()} />}</Match>
+            <Match when={true}>
               <>
                 <Show when={props.inputRaw}>
                   <ClampedPreview lineHeight={18} offset={16}>
@@ -605,10 +640,8 @@ function ToolCard(props: {
                   </ClampedPreview>
                 </Show>
               </>
-            }
-          >
-            {(diff) => <EditDiff data={diff()} />}
-          </Show>
+            </Match>
+          </Switch>
         </div>
       </Show>
     </div>

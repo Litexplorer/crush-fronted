@@ -39,6 +39,14 @@ export function toolIcon(name: string): JSX.Element {
       </svg>
     )
   }
+  if (/^(view)$/.test(lower)) {
+    return (
+      <svg viewBox="0 0 16 16" class="size-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z" stroke-linejoin="round" />
+        <circle cx="8" cy="8" r="2" />
+      </svg>
+    )
+  }
   if (/edit|write|multiedit|patch/.test(lower)) {
     return (
       <svg viewBox="0 0 16 16" class="size-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -91,6 +99,17 @@ export function toolSummary(name: string, inputRaw: string | undefined): string 
       return fileName + (filePath.includes("/") ? `  ·  ${filePath}` : "")
     }
   }
+  // view：文件名/路径 + 读取位置，与 TUI 卡片标题一致
+  if (lower === "view") {
+    const filePath = input.file_path ?? input.path
+    if (typeof filePath === "string" && filePath) {
+      const fileName = filePath.split("/").pop() ?? filePath
+      const offset = typeof input.offset === "number" ? input.offset : 0
+      const limit = typeof input.limit === "number" ? input.limit : 0
+      const position = offset || limit ? `  (${[offset ? `offset=${offset}` : "", limit ? `limit=${limit}` : ""].filter(Boolean).join(", ")})` : ""
+      return fileName + (filePath.includes("/") ? `  ·  ${filePath}` : "") + position
+    }
+  }
   if (lower === "agent") {
     const prompt = input.prompt
     if (typeof prompt === "string" && prompt) {
@@ -101,6 +120,71 @@ export function toolSummary(name: string, inputRaw: string | undefined): string 
   const raw = (inputRaw ?? "").trim()
   if (!raw) return "…"
   return truncate(raw, 80)
+}
+
+/** 工具类型展示名：已知工具用固定写法，其它（MCP 等）首字母大写 */
+const TOOL_LABELS: Record<string, string> = {
+  bash: "Bash",
+  shell: "Shell",
+  view: "View",
+  ls: "LS",
+  glob: "Glob",
+  grep: "Grep",
+  file_finder: "Files",
+  write: "Write",
+  edit: "Edit",
+  multiedit: "Multi-Edit",
+  apply_patch: "Patch",
+  fetch: "Fetch",
+  web_fetch: "WebFetch",
+  web_search: "WebSearch",
+  download: "Download",
+  sourcegraph: "Sourcegraph",
+  todos: "Todos",
+  question: "Question",
+  agent: "Agent",
+  agentic_fetch: "AgentFetch",
+  job_output: "Job Output",
+  job_kill: "Job Kill",
+  lsp_symbols: "Symbols",
+  lsp_definition: "Definition",
+  lsp_references: "References",
+  lsp_rename: "Rename",
+  lsp_call_hierarchy: "Call Hierarchy",
+  lsp_diagnostics: "Diagnostics",
+  lsp_restart: "LSP Restart",
+}
+
+/**
+ * toolLabel
+ * 参数：name 工具名
+ * 核心流程：查表得到可读类型名（Bash/Write/View…），未收录的工具只把首字母大写
+ */
+export function toolLabel(name: string): string {
+  const key = name.toLowerCase()
+  const label = TOOL_LABELS[key]
+  if (label) return label
+  // MCP 工具名很长（mcp_server_tool），统一压缩成 MCP，避免挤掉右侧摘要
+  if (key.startsWith("mcp_") || key.startsWith("mcp-")) return "MCP"
+  const words = key.split(/[_-]+/).filter(Boolean)
+  const titled = words.map((word) => word[0].toUpperCase() + word.slice(1)).join(" ")
+  return titled || name
+}
+
+/**
+ * toolTone
+ * 参数：name 工具名
+ * 核心流程：按工具类别给类型名上色 —— 终端绿、编辑橙、读取蓝（accent）、
+ *           代理紫、网络青；未知工具用常规灰
+ */
+export function toolTone(name: string): string {
+  const key = name.toLowerCase()
+  if (key === "bash" || key.includes("shell")) return "text-[#3fb950]"
+  if (/(edit|write|multiedit|patch)/.test(key)) return "text-[#f5a623]"
+  if (/(view|glob|grep|find)/.test(key) || key === "ls") return "text-accent"
+  if (/(agent|task|question|todos)/.test(key)) return "text-[#b48ead]"
+  if (/(fetch|web|download|sourcegraph)/.test(key)) return "text-[#5bc0de]"
+  return "text-muted"
 }
 
 /**
