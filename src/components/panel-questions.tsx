@@ -5,7 +5,7 @@
  *           点击条目回调宿主跳转到对应消息锚点；
  *           当前条目用 accent 淡背景标记，空会话展示占位文案。
  */
-import { For, Show } from "solid-js"
+import { createEffect, For, Show } from "solid-js"
 
 /** 问答索引条目：由 session.tsx 从 user 消息派生 */
 export interface QuestionItem {
@@ -64,8 +64,16 @@ export default function QuestionIndex(props: {
           <For each={props.questions}>
             {(question) => {
               const active = () => props.activeId === question.messageId
+              let itemRef: HTMLButtonElement | undefined
+
+              // 选中项跟随时间线滚动：仅在超出可视范围时滚动列表，不打断手动浏览
+              createEffect(() => {
+                if (active()) itemRef?.scrollIntoView({ block: "nearest" })
+              })
+
               return (
                 <button
+                  ref={itemRef}
                   type="button"
                   title={question.text}
                   aria-current={active() ? "true" : undefined}

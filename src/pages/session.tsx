@@ -249,6 +249,10 @@ export default function Session() {
   let toastTimer: ReturnType<typeof setTimeout> | undefined
   // 消息跳转高亮定时器：重复点击时重置
   let highlightTimer: ReturnType<typeof setTimeout> | undefined
+  // 滚动高亮的帧句柄：同一帧内的多次滚动事件只做一次可见行查询
+  let questionSyncFrame = 0
+  // 滞后校正：虚拟列表在下一帧才挂载新行，滚动停下后再对齐一次
+  let questionSettleTimer: ReturnType<typeof setTimeout> | undefined
 
   // 右侧面板：折叠状态与宽度从 localStorage 恢复；拖拽中仅更新内存，松手才持久化
   const [panelOpen, setPanelOpen] = createSignal(!readPanelCollapsed())
@@ -388,10 +392,12 @@ export default function Session() {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   })
 
-  // 离开页面：清理 toast 与消息高亮定时器
+  // 离开页面：清理 toast、消息高亮与滚动同步的这些定时器
   onCleanup(() => {
     if (toastTimer) clearTimeout(toastTimer)
     if (highlightTimer) clearTimeout(highlightTimer)
+    if (questionSyncFrame) cancelAnimationFrame(questionSyncFrame)
+    if (questionSettleTimer) clearTimeout(questionSettleTimer)
   })
 
   /**
@@ -1180,6 +1186,8 @@ export default function Session() {
   function handleScroll() {
     const el = scrollRef
     if (!el) return
+    // 位置变化即刷新右侧 Q&A 选中项，程序化的贴底滚动同样需要
+    scheduleQuestionSync()
     // 跟随滚动的程序化滚动：不参与“用户是否上翻”的判定
     if (performance.now() < autoScrollUntil) return
     stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
@@ -1324,6 +1332,75 @@ export default function Session() {
     })
   })
 
+  // 问句 id 集合：滚动高亮时用来判断某条 user 消息是否在索引里
+  const questionIds = createMemo(() => new Set(questions().map((item) => item.messageId)))
+
+  /** 滚动高亮的帧句柄：同一帧内的多次滚动事件只做一次可见行查询 */
+
+  /**
+   * syncActiveQuestion
+   * 核心流程：以可视区顶部下 24px 为判定线，在已挂载的行里找第一条跨过它的消息；
+   *           该行不是提问时向前回落到最近的 user 消息，据此更新右侧 Q&A 选中项
+   */
+  function syncActiveQuestion() {
+    const container = scrollRef
+    const list = messages()
+    const ids = questionIds()
+    if (!container || ids.size === 0) return
+
+    const rows = container.querySelectorAll<HTMLElement>("[data-message-id]")
+    if (rows.length === 0) return
+
+    const line = container.getBoundingClientRect().top + 24
+    let currentId = ""
+    for (const row of rows) {
+      if (row.getBoundingClientRect().bottom > line) {
+        currentId = row.dataset.messageId ?? ""
+        break
+      }
+    }
+    if (!currentId) currentId = rows[rows.length - 1].dataset.messageId ?? ""
+
+    const index = list.findIndex((message) => message.id === currentId)
+    if (index < 0) return
+
+    // 判定线落在回答中段时，高亮这条回答对应的那次提问
+    for (let i = index; i >= 0; i--) {
+      const message = list[i]
+      if (message.role === "user" && ids.has(message.id)) {
+        setActiveQuestionId(message.id)
+        return
+      }
+    }
+  }
+
+  /**
+   * scheduleQuestionSync
+   * 核心流程：滚动事件合到下一帧做一次即时同步，并在滚动停止后补一次校正
+   *           （虚拟列表换行晚于滚动事件，只靠即时同步会拿到上一批行）
+   */
+  function scheduleQuestionSync() {
+    if (!questionSyncFrame) {
+      questionSyncFrame = requestAnimationFrame(() => {
+        questionSyncFrame = 0
+        syncActiveQuestion()
+      })
+    }
+    if (questionSettleTimer) clearTimeout(questionSettleTimer)
+    questionSettleTimer = setTimeout(() => {
+      questionSettleTimer = undefined
+      syncActiveQuestion()
+    }, 140)
+  }
+
+  // 首屏与消息数变化后对齐一次：初始渲染不触发滚动事件
+  createEffect(
+    on(
+      () => [messages().length, state()] as const,
+      () => scheduleQuestionSync(),
+    ),
+  )
+
   /**
    * jumpToMessage
    * 参数：messageId 目标消息 id
@@ -1465,6 +1542,8 @@ export default function Session() {
                       stick={() => stickToBottom}
                       onAutoScroll={() => {
                         autoScrollUntil = performance.now() + 150
+                        // 贴底自动滚动后行位置会变化，重新对齐一次 Q&A 选中项
+                        scheduleQuestionSync()
                       }}
                       render={(id, index) => (
                         <div
