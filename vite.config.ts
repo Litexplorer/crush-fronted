@@ -17,6 +17,7 @@ export default defineConfig({
     },
   },
   server: {
+    allowedHosts: ['chen-server', 'kfc.test.huya.info'],
     port: 8070,
     proxy: {
       "/v1": {
