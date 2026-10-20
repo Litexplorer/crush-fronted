@@ -42,6 +42,11 @@ export interface WorkspaceConfig {
     small?: SelectedModel
   }
   providers?: Record<string, Provider>
+  /** 最近使用模型：后端在切换模型时维护，新→旧排列，最多 10 条 */
+  recent_models?: {
+    large?: SelectedModel[]
+    small?: SelectedModel[]
+  }
 }
 
 /** setModel 入参：provider/model 必填，reasoning_effort/think 可选（undefined 序列化时省略） */

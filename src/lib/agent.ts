@@ -35,6 +35,7 @@ export interface AgentAttachment {
 export interface SendMessageInput {
   session_id: string
   prompt: string
+  /** 空串表示插队：忙碌时并入当前回合的下一步（工具调用结束后立即生效） */
   run_id: string
   attachments?: AgentAttachment[]
 }
@@ -70,7 +71,8 @@ export async function getAgent(wsId: string): Promise<AgentInfo> {
  * sendMessage
  * 参数：wsId workspace ID；input 携带 session_id / prompt / run_id
  * 核心流程：POST /agent（handlePostWorkspaceAgent），202 表示受理；
- *           run 生命周期绑定 workspace 而非本次 HTTP 连接，结束信号为 SSE 的 run_complete
+ *           run_id 为空时后端按插队处理（忙碌会话在下一步折叠），
+ *           非空时作为独立 run 的完成事件关联 ID
  */
 export async function sendMessage(wsId: string, input: SendMessageInput): Promise<void> {
   await httpPost(`/workspaces/${encodeURIComponent(wsId)}/agent`, {

@@ -3,8 +3,9 @@
  * 参数：wsId workspace ID；onToast 轻提示回调（加载失败 / 切换失败时调用）
  * 核心流程：Composer 底部的模型选择器 ——
  *           打开时拉取 providers 目录 + workspace config（config 失败可点击重试）
- *           下拉按 provider 分组、支持输入过滤、当前项打勾
- *           选中后乐观更新显示 → POST setModel → 失败回退旧值并 toast
+ *           顶部 Recent 分组展示最近使用模型（config.recent_models.large），其余按 provider 分组；
+ *           支持输入过滤、当前项打勾，Recent 中的模型从普通分组剔除避免重复
+ *           选中后乐观更新显示与最近使用顺序 → POST setModel → 失败回退旧值并 toast
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import {
@@ -22,11 +23,52 @@ function errorMessage(err: unknown): string {
   return e?.message ?? "Unknown error"
 }
 
+/**
+ * ModelRow
+ * 参数：name 展示名；id 模型 id；providerName 可选（Recent 分组展示来源）；current 是否当前模型；onSelect 选择回调
+ * 核心流程：统一下拉行 UI —— 模型名 + 模型 id + 当前项勾选；Recent 行额外前置 provider 名
+ */
+function ModelRow(props: {
+  name: string
+  id: string
+  providerName?: string
+  current: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] transition-colors hover:bg-raised"
+      classList={{ "bg-raised": props.current }}
+      onClick={() => props.onSelect()}
+    >
+      <Show when={props.providerName}>
+        <span class="max-w-[88px] shrink-0 truncate text-[11px] text-faint">{props.providerName}</span>
+      </Show>
+      <span class="min-w-0 flex-1 truncate text-text">{props.name}</span>
+      <span class="shrink-0 text-[11px] text-faint">{props.id}</span>
+      <Show when={props.current}>
+        <svg viewBox="0 0 14 14" class="size-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2.5 7.5 5.5 10.5 11.5 3.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </Show>
+    </button>
+  )
+}
+
 /** 过滤后的分组结构：provider 名 + 命中的模型列表 */
 interface ModelGroup {
   id: string
   name: string
   models: { id: string; name: string }[]
+}
+
+/** 最近使用项：跨 provider，需要同时携带 provider 展示名 */
+interface ModelOption {
+  provider: string
+  providerName: string
+  id: string
+  name: string
 }
 
 export default function ModelSelect(props: {
@@ -48,6 +90,8 @@ export default function ModelSelect(props: {
   const [pending, setPending] = createSignal(false)
   const [open, setOpen] = createSignal(false)
   const [filter, setFilter] = createSignal("")
+  // 最近使用模型：数据来自 config.recent_models.large（后端已按新→旧维护）
+  const [recent, setRecent] = createSignal<SelectedModel[]>([])
 
   let rootRef: HTMLDivElement | undefined
   let inputRef: HTMLInputElement | undefined
@@ -74,10 +118,13 @@ export default function ModelSelect(props: {
       if (cfg) {
         setCurrent(cfg.models?.large)
         setConfigProviders(Object.values(cfg.providers ?? {}))
+        // 最近使用列表随 config 一起返回：首屏即可排序到候选列表最前
+        setRecent(cfg.recent_models?.large ?? [])
         setConfigError(false)
         emitModel(cfg.models?.large)
       } else {
         setConfigError(true)
+        setRecent([])
         emitModel(undefined)
       }
     } catch (err) {
@@ -100,6 +147,30 @@ export default function ModelSelect(props: {
     }
     return [...map.values()]
   })
+
+  /**
+   * recentModels
+   * 核心流程：把 config 里的 recent_models.large 映射为候选行数据 ——
+   *           跳过目录中已不存在的 provider/model，按 provider+model 去重，保持后端的新→旧顺序
+   */
+  const recentModels = createMemo<ModelOption[]>(() => {
+    const out: ModelOption[] = []
+    const seen = new Set<string>()
+    for (const item of recent()) {
+      if (!item.provider || !item.model) continue
+      const key = `${item.provider}\u0000${item.model}`
+      if (seen.has(key)) continue
+      const pv = allProviders().find((p) => p.id === item.provider)
+      const md = pv?.models?.find((m) => m.id === item.model)
+      if (!pv || !md) continue
+      seen.add(key)
+      out.push({ provider: pv.id, providerName: pv.name || pv.id, id: md.id, name: md.name || md.id })
+    }
+    return out
+  })
+
+  /** recentKeys：用于从普通 provider 分组中剔除已置顶的模型，避免重复出现 */
+  const recentKeys = createMemo(() => new Set(recentModels().map((m) => `${m.provider}\u0000${m.id}`)))
 
   /**
    * contextWindowOf
@@ -156,20 +227,39 @@ export default function ModelSelect(props: {
     return md?.name || cur.model
   })
 
-  /** groups：按输入过滤后仍非空的 provider 分组（id/name 双字段匹配，大小写不敏感） */
+  /**
+   * groups：按输入过滤后仍非空的 provider 分组 ——
+   * 搜索词同时匹配 provider 名/id 与模型名/id：命中 provider 时展示该组全部模型；
+   * 空搜索时剔除已置顶的最近项，搜索时展示全量避免与 Recent 重复
+   */
   const groups = createMemo<ModelGroup[]>(() => {
     const q = filter().trim().toLowerCase()
-    return allProviders()
-      .map((p) => ({
-        id: p.id,
-        name: p.name || p.id,
-        models: (p.models ?? [])
-          .filter(
-            (m) => !q || m.id.toLowerCase().includes(q) || (m.name ?? "").toLowerCase().includes(q),
-          )
-          .map((m) => ({ id: m.id, name: m.name || m.id })),
-      }))
+    const pinned = q ? new Set<string>() : recentKeys()
+    // provider 名/id 命中的分组优先排列，避免被「模型名恰好包含关键词」的分组挤到后面
+    const providerHits = new Set(
+      allProviders()
+        .filter((p) => q && ((p.name || p.id).toLowerCase().includes(q) || p.id.toLowerCase().includes(q)))
+        .map((p) => p.id),
+    )
+    const list = allProviders()
+      .map((p) => {
+        const providerName = p.name || p.id
+        const providerHit = providerHits.has(p.id)
+        return {
+          id: p.id,
+          name: providerName,
+          models: (p.models ?? [])
+            .filter((m) => {
+              if (pinned.has(`${p.id}\u0000${m.id}`)) return false
+              if (!q) return true
+              if (providerHit) return true
+              return m.id.toLowerCase().includes(q) || (m.name ?? "").toLowerCase().includes(q)
+            })
+            .map((m) => ({ id: m.id, name: m.name || m.id })),
+        }
+      })
       .filter((g) => g.models.length > 0)
+    return q ? list.sort((a, b) => Number(providerHits.has(b.id)) - Number(providerHits.has(a.id))) : list
   })
 
   /**
@@ -225,6 +315,13 @@ export default function ModelSelect(props: {
         model: modelId,
         ...(md?.default_reasoning_effort ? { reasoning_effort: md.default_reasoning_effort } : {}),
       })
+      // 写入成功：本地同步最近使用顺序（新→旧、去重、最多 10 条），下次打开下拉立即置顶
+      setRecent((prev) =>
+        [
+          { provider: providerId, model: modelId },
+          ...prev.filter((m) => !(m.provider === providerId && m.model === modelId)),
+        ].slice(0, 10),
+      )
     } catch (err) {
       setCurrent(prev)
       emitModel(prev)
@@ -242,6 +339,7 @@ export default function ModelSelect(props: {
         setProviders([])
         setConfigProviders([])
         setCurrent(undefined)
+        setRecent([])
         setLoaded(false)
         emitModel(undefined)
         void load(true)
@@ -303,33 +401,42 @@ export default function ModelSelect(props: {
           </div>
           <div class="min-h-0 flex-1 overflow-y-auto p-1">
             <Show
-              when={groups().length > 0}
+              when={groups().length > 0 || (!filter().trim() && recentModels().length > 0)}
               fallback={
                 <div class="px-2 py-3 text-center text-[12px] text-muted">
                   {loading() ? "Loading models…" : "No matching models"}
                 </div>
               }
             >
+              {/* Recent：最近使用模型置顶（跨 provider），搜索时隐藏避免与常规分组重复 */}
+              <Show when={!filter().trim() && recentModels().length > 0}>
+                <div class="mb-1">
+                  <div class="px-2 py-1 text-[11px] font-medium text-faint">Recent</div>
+                  <For each={recentModels()}>
+                    {(m) => (
+                      <ModelRow
+                        name={m.name}
+                        id={m.id}
+                        providerName={m.providerName}
+                        current={isCurrent(m.provider, m.id)}
+                        onSelect={() => void select(m.provider, m.id)}
+                      />
+                    )}
+                  </For>
+                </div>
+              </Show>
               <For each={groups()}>
                 {(g) => (
                   <div class="mb-1">
                     <div class="px-2 py-1 text-[11px] font-medium text-faint">{g.name}</div>
                     <For each={g.models}>
                       {(m) => (
-                        <button
-                          type="button"
-                          class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] transition-colors hover:bg-raised"
-                          classList={{ "bg-raised": isCurrent(g.id, m.id) }}
-                          onClick={() => void select(g.id, m.id)}
-                        >
-                          <span class="min-w-0 flex-1 truncate text-text">{m.name}</span>
-                          <span class="shrink-0 text-[11px] text-faint">{m.id}</span>
-                          <Show when={isCurrent(g.id, m.id)}>
-                            <svg viewBox="0 0 14 14" class="size-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" stroke-width="2">
-                              <path d="M2.5 7.5 5.5 10.5 11.5 3.5" stroke-linecap="round" stroke-linejoin="round" />
-                            </svg>
-                          </Show>
-                        </button>
+                        <ModelRow
+                          name={m.name}
+                          id={m.id}
+                          current={isCurrent(g.id, m.id)}
+                          onSelect={() => void select(g.id, m.id)}
+                        />
                       )}
                     </For>
                   </div>
