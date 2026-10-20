@@ -286,6 +286,10 @@ export default function Session() {
 
   let scrollRef: HTMLDivElement | undefined
   let draftRef: HTMLTextAreaElement | undefined
+  // 输入历史游标：-1 表示当前草稿，>=0 指向历史条目（0 为最新一条）
+  let historyIndex = -1
+  // 进入历史前的草稿快照：回退到草稿态时原样恢复
+  let historyDraft = ""
   // 贴近底部标记：用户上翻即停用自动滚动，重新滚到底部附近后恢复
   let stickToBottom = true
   // 跟随滚动的时间窗：虚拟列表程序化滚底后，滚动监听不再据此判定用户上翻
@@ -1112,6 +1116,7 @@ export default function Session() {
       }
       setDraft("")
       setMentionOpen(false)
+      resetHistoryCursor()
       void handleCompact()
       return
     }
@@ -1119,6 +1124,7 @@ export default function Session() {
     setDraft("")
     setSendError("")
     setMentionOpen(false)
+    resetHistoryCursor()
     setBusy(true)
     setSending(true)
 
@@ -1196,13 +1202,66 @@ export default function Session() {
   /**
    * handleInputKeyDown
    * 参数：e 键盘事件
-   * 核心流程：Enter（非 Shift、非输入法组词）拦截默认行为并触发发送，Shift+Enter 保留换行
+   * 核心流程：Enter（非 Shift、非输入法组词）拦截默认行为并触发发送；
+   *           ↑/↓ 在光标处于首行/末行时回溯本会话输入历史，其余情况交还原生光标移动
    */
   function handleInputKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault()
       void handleSend()
+      return
     }
+    if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return
+    // @ 文件浮层自己用 ↑↓ 选文件：浮层打开时让给它
+    if (mentionOpen()) return
+    const entries = historyEntries()
+    if (entries.length === 0) return
+    const el = e.currentTarget as HTMLTextAreaElement
+    // 多行草稿：只在首行/末行拦截（单行草稿两处都成立，光标在行内任意位置都能回溯）
+    if (e.key === "ArrowUp" && el.value.slice(0, el.selectionStart).includes("\n")) return
+    if (e.key === "ArrowDown" && el.value.slice(el.selectionEnd).includes("\n")) return
+    if (e.key === "ArrowUp") {
+      // 已到最早一条：继续阻挡，避免光标跳到开头
+      if (historyIndex >= entries.length - 1) {
+        e.preventDefault()
+        return
+      }
+      // 首次进入历史：记下未发送草稿，↓ 回退到草稿态时原样恢复
+      if (historyIndex === -1) historyDraft = draft()
+      historyIndex += 1
+    } else {
+      if (historyIndex === -1) return
+      historyIndex -= 1
+    }
+    e.preventDefault()
+    applyDraft(historyIndex === -1 ? historyDraft : entries[historyIndex])
+  }
+
+  /**
+   * applyDraft
+   * 参数：value 目标文本
+   * 核心流程：写入草稿 → 下一帧把光标置末并滚到可见（高度自适应由 draft effect 接管）
+   */
+  function applyDraft(value: string) {
+    setDraft(value)
+    // 等一帧：高度自适应 effect 跑完后再定位光标，避免落在旧布局上
+    requestAnimationFrame(() => {
+      const el = draftRef
+      if (!el) return
+      el.setSelectionRange(el.value.length, el.value.length)
+      el.scrollTop = el.scrollHeight
+    })
+  }
+
+  /**
+   * resetHistoryCursor
+   * 参数：无
+   * 核心流程：清空历史游标与草稿快照，发送后回到实时草稿态
+   */
+  function resetHistoryCursor() {
+    historyIndex = -1
+    historyDraft = ""
   }
 
   /**
@@ -1308,6 +1367,20 @@ export default function Session() {
     const map = new Map<string, TimelineMessage>()
     for (const message of messages()) map.set(message.id, message)
     return map
+  })
+
+  // 输入历史：本会话已发送的提问文本，最新在前、同文去重，供输入框 ↑/↓ 回溯
+  const historyEntries = createMemo(() => {
+    const seen = new Set<string>()
+    const list: string[] = []
+    for (const message of messages()) {
+      if (message.role !== "user") continue
+      const text = textOf(message).trim()
+      if (!text || seen.has(text)) continue
+      seen.add(text)
+      list.push(text)
+    }
+    return list.reverse()
   })
 
   // 工作区路径：服务端详情优先，其次选中项/当前标签中持久化的项目路径
