@@ -5,7 +5,7 @@
  *           text            user 纯文本保留换行，assistant 走 Markdown
  *           reasoning       Thinking 折叠卡：流式自动展开、结束自动折叠，可点击切换
  *           tool_call       工具卡片：图标+名称+参数摘要，可展开 input JSON；
- *                           按 tool_call_id 合并对应 tool_result 一并展示
+ *                           MCP 工具全部参数常显，按 tool_call_id 合并对应 tool_result 一并展示
  *           tool_result     无对应调用时独立成卡
  *           shell_command   $ command + output 等宽卡片
  *           image_url/binary 图片缩略图（点击放大），非图片 binary 仍显示 [image] 占位
@@ -21,9 +21,10 @@ import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
 import ViewCode, { parseViewData } from "./view-code"
 import BashBody, { parseBashData } from "./bash-card"
+import McpArgs from "./mcp-card"
 import { useSubagentStore } from "./subagent-context"
 import RunningIndicator from "./running-indicator"
-import { formatJson, toolIcon, toolLabel, toolSummary, toolTone } from "./tool-visuals"
+import { formatJson, isMcpTool, toolIcon, toolLabel, toolSummary, toolTone } from "./tool-visuals"
 
 /** 时间线消息：proto.Message + 乐观插入 pending 标记 */
 export type TimelineMessage = SessionMessage & { pending?: boolean }
@@ -598,8 +599,14 @@ function ToolCard(props: {
   const bashData = createMemo(() =>
     isBash() ? parseBashData(props.inputRaw, props.result?.metadata, props.result?.content, hasError()) : undefined,
   )
+  // MCP：参数常显，展开区只补结果内容，不再重复 input JSON
+  const isMcp = () => isMcpTool(props.name)
   const hasBody = () =>
-    !!props.inputRaw || !!props.result?.content || !!editDiff() || !!viewData() || !!bashData()
+    (!isMcp() && !!props.inputRaw) ||
+    !!props.result?.content ||
+    !!editDiff() ||
+    !!viewData() ||
+    !!bashData()
   return (
     <div class="overflow-hidden rounded-[8px] border border-edge bg-base transition-colors hover:bg-raised/60">
       <button
@@ -639,6 +646,10 @@ function ToolCard(props: {
           </div>
         )}
       </Show>
+      {/* MCP：全部参数常显（与 Bash 命令一致），不展开也能看到调用内容 */}
+      <Show when={isMcp()}>
+        <McpArgs inputRaw={props.inputRaw} />
+      </Show>
       <Show when={props.open && hasBody() && !bashData()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
           <Switch>
@@ -646,7 +657,7 @@ function ToolCard(props: {
             <Match when={editDiff()}>{(diff) => <EditDiff data={diff()} />}</Match>
             <Match when={true}>
               <>
-                <Show when={props.inputRaw}>
+                <Show when={!isMcp() && props.inputRaw}>
                   <ClampedPreview lineHeight={18} offset={16}>
                     <pre class="md-pre">{formatJson(props.inputRaw)}</pre>
                   </ClampedPreview>

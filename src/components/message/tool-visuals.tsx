@@ -77,6 +77,25 @@ export function toolIcon(name: string): JSX.Element {
 }
 
 /**
+ * isMcpTool
+ * 参数：name 工具名
+ * 核心流程：MCP 工具由服务端命名为 mcp_<server>_<tool>（部分实现用双下划线），
+ *           另有读取 MCP 资源的内建工具 list_mcp_resources / read_mcp_resource
+ */
+export function isMcpTool(name: string): boolean {
+  return /^mcp[_-]/i.test(name) || /^(list|read)_mcp_/i.test(name)
+}
+
+/**
+ * mcpToolName
+ * 参数：name 工具名
+ * 核心流程：去掉 mcp_ 前缀与双下划线分隔，得到可读的服务名·工具名
+ */
+export function mcpToolName(name: string): string {
+  return name.replace(/^mcp[_-]+/i, "").replace(/__/g, " · ")
+}
+
+/**
  * toolSummary
  * 参数：name 工具名；inputRaw 原始 input 字符串
  * 核心流程：bash 取 command 首行；edit/write 取文件名；
@@ -120,6 +139,8 @@ export function toolSummary(name: string, inputRaw: string | undefined): string 
       if (firstLine) return truncate(firstLine, 80)
     }
   }
+  // MCP：参数已在卡片内常显，头部只标出服务名与工具名，不再回退原始 JSON
+  if (isMcpTool(name)) return truncate(mcpToolName(name), 80)
   const raw = (inputRaw ?? "").trim()
   if (!raw) return "…"
   return truncate(raw, 80)
