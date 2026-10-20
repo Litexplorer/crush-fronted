@@ -66,6 +66,8 @@ export default function Titlebar() {
   const location = useLocation()
   const [state, setState] = createSignal<ConnectionState>("disconnected")
   const [creating, setCreating] = createSignal(false)
+  // 快捷键切换中：解析 workspace 期间忽略连按，避免并发重建工作区
+  const [switching, setSwitching] = createSignal(false)
   const [statusOpen, setStatusOpen] = createSignal(false)
   // 当前路由对应的会话标签：用于高亮与工作区回退
   const currentSessionId = () => routeSessionId(location.pathname)
@@ -224,6 +226,12 @@ export default function Titlebar() {
     onCleanup(() => clearInterval(timer))
   })
 
+  onMount(() => {
+    // 全局快捷键：Alt+←/→ 按标签展示顺序切换会话（挂在 document 上，任意焦点位置可用）
+    document.addEventListener("keydown", handleTabShortcut)
+    onCleanup(() => document.removeEventListener("keydown", handleTabShortcut))
+  })
+
   /**
    * handleNewSession
    * 参数：无（读取当前会话/选中工作区）
@@ -261,6 +269,54 @@ export default function Titlebar() {
     const target = { ...tab, workspaceId: wsId ?? tab.workspaceId }
     setActiveSession(target)
     navigate(sessionUrl(target))
+  }
+
+  /**
+   * switchTab
+   * 参数：delta 方向（1 下一个 / -1 上一个）
+   * 核心流程：按标签展示顺序取相邻标签（首尾循环）→ 复用 openTab 切换；
+   *           不在会话页时从首/尾进入；解析 workspace 期间忽略连按
+   */
+  async function switchTab(delta: 1 | -1) {
+    if (switching()) return
+    const tabs = openSessions()
+    if (tabs.length < 2) return
+    const index = tabs.findIndex((tab) => tab.id === currentSessionId())
+    const next = index === -1 ? (delta > 0 ? 0 : tabs.length - 1) : (index + delta + tabs.length) % tabs.length
+    if (next === index) return
+    setSwitching(true)
+    try {
+      await openTab(tabs[next])
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  /**
+   * isEditableTarget
+   * 参数：target 键盘事件目标
+   * 核心流程：判断焦点是否落在可编辑元素上（输入框/文本域/下拉/contenteditable），
+   *           这些元素里 Alt+方向键另有含义（按词移动光标），快捷键必须让位
+   */
+  function isEditableTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null
+    if (!el || typeof el.closest !== "function") return false
+    return !!el.closest("input, textarea, select, [contenteditable='true']")
+  }
+
+  /**
+   * handleTabShortcut
+   * 参数：event 全局键盘事件
+   * 核心流程：Alt+←/→ 切换标签；带其它修饰键、输入法组词、可编辑焦点、
+   *           或有浮层（会话选择器/标签菜单）打开时不处理
+   */
+  function handleTabShortcut(event: KeyboardEvent) {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (event.isComposing) return
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    if (isEditableTarget(event.target) || pickerOpen() || tabsMenu()) return
+    event.preventDefault()
+    void switchTab(event.key === "ArrowRight" ? 1 : -1)
   }
 
   /**
