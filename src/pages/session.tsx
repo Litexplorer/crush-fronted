@@ -7,6 +7,7 @@
  *           时间线：user 右侧气泡、assistant 左对齐无气泡；分片渲染委托 components/message/parts
  *           输入区：Enter 发送（Shift+Enter 换行）、乐观插入用户消息、busy 时 Stop 可中断
  *           滚动：仅当用户贴近底部时新消息自动滚到底
+ *           头部：会话标题 + 工作区名/路径（色点与标题栏标签一致）
  *           双栏：左侧会话内容，右侧 SessionPanel（Files 树，可折叠/拖宽，状态存 localStorage）
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
@@ -29,13 +30,23 @@ import TodoDock from "../components/todo-dock"
 import type { QuestionItem } from "../components/panel-questions"
 import { ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
 import { recalledWorkspacePath, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
-import { createWorkspace } from "../lib/workspaces"
+import { createWorkspace, getWorkspace, type Workspace } from "../lib/workspaces"
+import { workspaceColor } from "../lib/workspace-color"
 import { childSessionId, loadSubagent } from "../lib/subagents"
 import type { FileEntry } from "../lib/files"
 import type { ApiError } from "../lib/http"
 
 type LoadState = "loading" | "ready" | "error"
 type AgentState = "checking" | "ready" | "unready"
+
+/**
+ * basename
+ * 参数：path 项目绝对路径
+ * 核心流程：取最后一个非空目录名；路径为空时返回空串
+ */
+function basename(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? path
+}
 
 /** 右侧面板：宽度默认/边界与 localStorage 持久化键 */
 const PANEL_WIDTH_DEFAULT = 420
@@ -195,6 +206,8 @@ export default function Session() {
   const [session, setSession] = createSignal<Session>()
   const [state, setState] = createSignal<LoadState>("loading")
   const [error, setError] = createSignal("")
+  // 工作区详情：头部展示项目路径；本地选中项/标签缺失时按 id 从服务端补齐
+  const [workspaceInfo, setWorkspaceInfo] = createSignal<Workspace>()
 
   const [messages, setMessages] = createSignal<ChatMessage[]>([])
   const [busy, setBusy] = createSignal(false)
@@ -630,12 +643,26 @@ export default function Session() {
     return map
   })
 
+  /** 会话级工具调用表：结果消息只带 tool_call_id，据此反查原始 input（edit diff 需要文件路径） */
+  const toolCalls = createMemo(() => {
+    const map = new Map<string, ToolCallPartData>()
+    for (const message of messages()) {
+      for (const part of message.parts) {
+        if (part.type !== "tool_call") continue
+        const data = (part.data ?? {}) as ToolCallPartData
+        if (data.id) map.set(data.id, data)
+      }
+    }
+    return map
+  })
+
   const subagentStore: SubagentStore = {
     messages: subagentMessages,
     sessions: subagentSessions,
     loading: subagentLoading,
     errors: subagentErrors,
     toolResults,
+    toolCalls,
     ensure: (sessionId) => void ensureSubagentLoaded(sessionId),
   }
 
@@ -767,6 +794,25 @@ export default function Session() {
       }
     } finally {
       setQuesResponding(false)
+    }
+  }
+
+  /**
+   * loadWorkspaceInfo
+   * 参数：wsId workspace ID
+   * 核心流程：GET /workspaces/{id} 获取项目路径 → 回填头部展示与当前标签的 projectPath；
+   *           失败时沿用本地已知路径，不阻塞会话主流程
+   */
+  async function loadWorkspaceInfo(wsId: string) {
+    try {
+      // 拉取工作区详情：路径是服务端生成 workspace id 之外唯一稳定的项目标识
+      const info = await getWorkspace(wsId)
+      if (params.workspaceId !== wsId) return
+      setWorkspaceInfo(info)
+      const tab = openSessions().find((item) => item.id === params.sessionId)
+      if (tab && info.path && tab.projectPath !== info.path) updateSessionTab({ ...tab, projectPath: info.path })
+    } catch {
+      // 详情不可用：回退到 selectedWorkspace / 标签里的已知路径
     }
   }
 
@@ -1149,6 +1195,7 @@ export default function Session() {
         setMentionOpen(false)
         setActiveQuestionId("")
         setHighlightedMessageId("")
+        setWorkspaceInfo(undefined)
         if (highlightTimer) clearTimeout(highlightTimer)
         ensureEvents(wsId)
         const unsubscribe = subscribeEvents(handleEvent)
@@ -1163,6 +1210,7 @@ export default function Session() {
           void reportCurrentSession(wsId, null)
         })
         void loadYolo(wsId)
+        void loadWorkspaceInfo(wsId)
         void loadSession(wsId, sid)
         void loadMessages(wsId, sid)
         void ensureAgentReady(wsId)
@@ -1181,6 +1229,17 @@ export default function Session() {
   })
 
   const title = () => session()?.title || "Untitled"
+
+  // 工作区路径：服务端详情优先，其次选中项/当前标签中持久化的项目路径
+  const workspacePath = () =>
+    workspaceInfo()?.path ??
+    (selectedWorkspace()?.id === params.workspaceId ? selectedWorkspace()?.path : undefined) ??
+    openSessions().find((tab) => tab.id === params.sessionId)?.projectPath ??
+    ""
+  // 工作区展示名：路径末段；路径未知时退回 workspace id
+  const workspaceName = () => basename(workspacePath()) || params.workspaceId
+  // 工作区配色：与标题栏标签色条保持一致，便于跨会话识别
+  const workspaceTint = () => workspaceColor(workspacePath() || params.workspaceId)
 
   // 运行指示：busy 且最后一条不是"正在流式的 assistant"时显示在时间线底部；
   // assistant 已开始流式后由消息自身的底部指示器接管，避免出现两条
@@ -1273,8 +1332,25 @@ export default function Session() {
             <path d="M10 3.5 5.5 8l4.5 4.5" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <span class="min-w-0 truncate px-1 text-[13px] font-medium text-text">{title()}</span>
-        <div class="ml-auto flex items-center gap-2 pr-1.5" title={`Events: ${eventsConnection()}`}>
+        {/* 会话标题 + 工作区信息：标题主行，项目名/路径副行（色点与标签栏一致） */}
+        <div class="flex min-w-0 flex-1 flex-col justify-center">
+          <span class="truncate px-1 text-[13px] font-medium leading-4 text-text">{title()}</span>
+          <span
+            class="flex min-w-0 items-center gap-1 px-1 text-[11px] leading-4 text-muted"
+            title={workspacePath() || params.workspaceId}
+          >
+            <span
+              aria-hidden="true"
+              class="size-1.5 shrink-0 rounded-full"
+              style={{ "background-color": workspaceTint()?.solid ?? "transparent" }}
+            />
+            <span class="shrink-0">{workspaceName()}</span>
+            <Show when={workspacePath()}>
+              <span class="min-w-0 truncate opacity-70">· {workspacePath()}</span>
+            </Show>
+          </span>
+        </div>
+        <div class="ml-auto flex shrink-0 items-center gap-2 pr-1.5" title={`Events: ${eventsConnection()}`}>
           <span
             class="size-2 rounded-full transition-colors"
             classList={{ "opacity-50": eventsConnection() !== "connected" }}

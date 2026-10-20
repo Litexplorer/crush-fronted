@@ -6,7 +6,7 @@
  */
 import { createContext, useContext, type Accessor, type JSX } from "solid-js"
 import type { Session, SessionMessage } from "../../lib/sessions"
-import type { ToolResultPartData } from "./parts"
+import type { ToolCallPartData, ToolResultPartData } from "./parts"
 
 export interface SubagentStore {
   messages: Accessor<Record<string, SessionMessage[]>>
@@ -14,6 +14,7 @@ export interface SubagentStore {
   loading: Accessor<Record<string, boolean>>
   errors: Accessor<Record<string, string>>
   toolResults: Accessor<Map<string, ToolResultPartData>>
+  toolCalls: Accessor<Map<string, ToolCallPartData>>
   ensure: (sessionId: string) => void
 }
 

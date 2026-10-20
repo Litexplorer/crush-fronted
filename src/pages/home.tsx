@@ -14,7 +14,7 @@ import {
   type Workspace,
 } from "../lib/workspaces"
 import { createSession, listSessions, type Session } from "../lib/sessions"
-import { recalledWorkspacePath, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import { forgetProject, recalledWorkspacePath, recentProjectPaths, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import SettingsDialog from "../components/settings-dialog"
 import { listDirs, type FsDirEntry } from "../lib/fs-browser"
 import type { ApiError } from "../lib/http"
@@ -35,6 +35,37 @@ function initial(name: string): string {
 function errorMessage(err: unknown): string {
   const e = err as ApiError
   return e?.message ?? "Unknown error"
+}
+
+/** 仅存在于本地记录、尚未在服务端重建的项目 id 前缀 */
+const RECENT_PROJECT_PREFIX = "recent:"
+
+/** 是否为本地记录占位项：点击时需要先按路径重建工作区 */
+function isRecentProject(ws: Workspace): boolean {
+  return ws.id.startsWith(RECENT_PROJECT_PREFIX)
+}
+
+/**
+ * mergeProjects
+ * 参数：live 后端当前存活的工作区
+ * 核心流程：按最近打开顺序合并本地记录 —— 存活项目用真实 id，
+ *           已失效项目用 recent: 占位，点击时再按路径重建
+ */
+function mergeProjects(live: Workspace[]): Workspace[] {
+  const liveByPath = new Map(live.map((ws) => [ws.path, ws]))
+  const seen = new Set<string>()
+  const merged: Workspace[] = []
+  for (const path of recentProjectPaths()) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    merged.push(liveByPath.get(path) ?? { id: `${RECENT_PROJECT_PREFIX}${path}`, path })
+  }
+  for (const ws of live) {
+    if (seen.has(ws.path)) continue
+    seen.add(ws.path)
+    merged.push(ws)
+  }
+  return merged
 }
 
 /** 会话分组：今天 / 昨天 / 更早（updated_at 为 Unix 秒） */
@@ -101,14 +132,14 @@ export default function Home() {
         if (path) {
           const ws = await createWorkspace({ path })
           rememberWorkspace(ws)
-          setWorkspaces([ws])
+          setWorkspaces(mergeProjects([ws]))
           setSelectedWorkspace(ws)
           setLoadState("ready")
           navigate(`/w/${encodeURIComponent(ws.id)}`)
           return
         }
       }
-      setWorkspaces(data)
+      setWorkspaces(mergeProjects(data))
       setLoadState("ready")
     } catch (err) {
       setLoadError(errorMessage(err))
@@ -136,9 +167,23 @@ export default function Home() {
   /**
    * handleSelect
    * 参数：ws 被点击的 workspace
-   * 核心流程：写入全局选中 store，并把 URL 更新为 /w/:id（可刷新恢复）
+   * 核心流程：本地记录占位项先按路径重建工作区再选中；
+   *           其余写入全局选中 store 并把 URL 更新为 /w/:id
    */
-  function handleSelect(ws: Workspace) {
+  async function handleSelect(ws: Workspace) {
+    if (isRecentProject(ws)) {
+      try {
+        // 失效项目：服务端 id 是内存态，按路径重建后替掉占位项
+        const created = await createWorkspace({ path: ws.path })
+        rememberWorkspace(created)
+        setWorkspaces((prev) => prev.map((item) => (item.id === ws.id ? created : item)))
+        setSelectedWorkspace(created)
+        navigate(`/w/${encodeURIComponent(created.id)}`)
+      } catch (err) {
+        showToast(errorMessage(err))
+      }
+      return
+    }
     rememberWorkspace(ws)
     setSelectedWorkspace(ws)
     navigate(`/w/${encodeURIComponent(ws.id)}`)
@@ -153,9 +198,17 @@ export default function Home() {
   async function handleDeleteConfirm() {
     const target = deleteTarget()
     if (!target) return
+    // 本地记录占位：仅从最近项目移除，无需请求后端
+    if (isRecentProject(target)) {
+      forgetProject(target.path)
+      setDeleteTarget(undefined)
+      setWorkspaces((prev) => prev.filter((item) => item.id !== target.id))
+      return
+    }
     try {
       // 删除工作区：带 client_id 查询参数
       await deleteWorkspace(target.id)
+      forgetProject(target.path)
       setDeleteTarget(undefined)
       // 删中的是选中项：清空选中并回退到 /（避免 URL 残留失效 id）
       if (selectedWorkspace()?.id === target.id) {

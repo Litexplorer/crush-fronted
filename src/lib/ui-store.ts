@@ -194,6 +194,27 @@ export function closeSessionTab(id: string): ActiveSession | undefined {
 }
 
 /**
+ * reorderSessionTabs
+ * 参数：sourceId 被拖拽标签；targetId 落点标签；after 是否插到落点右侧
+ * 核心流程：移除源标签 → 按 id 重新定位落点 → 插入并持久化；
+ *           顺序未变化时直接返回，避免无意义写入
+ */
+export function reorderSessionTabs(sourceId: string, targetId: string, after: boolean) {
+  setOpenSessions((prev) => {
+    const from = prev.findIndex((item) => item.id === sourceId)
+    if (from === -1 || !prev.some((item) => item.id === targetId) || sourceId === targetId) return prev
+    const next = [...prev]
+    const [moved] = next.splice(from, 1)
+    // 源标签移除后落点下标可能左移，按 id 重新定位
+    const at = next.findIndex((item) => item.id === targetId) + (after ? 1 : 0)
+    next.splice(at, 0, moved)
+    if (next.every((item, index) => item.id === prev[index].id)) return prev
+    persistSessionTabs(next)
+    return next
+  })
+}
+
+/**
  * retargetSessionTabs
  * 参数：projectPath 项目路径；workspaceId 当前有效的 workspace id
  * 核心流程：服务端重启后 workspace id 全部失效，按路径把同项目的标签批量指向新 id，

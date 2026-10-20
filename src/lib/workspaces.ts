@@ -32,6 +32,15 @@ export async function listWorkspaces(): Promise<Workspace[]> {
 }
 
 /**
+ * getWorkspace
+ * 参数：id workspace ID
+ * 核心流程：GET /workspaces/{id}，返回单个 workspace 详情（会话页据此展示项目路径）
+ */
+export async function getWorkspace(id: string): Promise<Workspace> {
+  return httpGet<Workspace>(`/workspaces/${encodeURIComponent(id)}`)
+}
+
+/**
  * createWorkspace
  * 参数：input.path 项目的绝对路径
  * 核心流程：POST /workspaces，body 自动附带持久化 client_id，返回创建（或幂等命中）的 workspace

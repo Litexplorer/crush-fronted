@@ -17,6 +17,7 @@ import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
+import EditDiff, { parseEditDiff } from "./edit-diff"
 import { useSubagentStore } from "./subagent-context"
 import RunningIndicator from "./running-indicator"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
@@ -297,6 +298,15 @@ function SummaryMessage(props: { message: TimelineMessage }) {
 }
 
 /**
+ * defaultOpenTool
+ * 参数：name 工具名
+ * 核心流程：edit 类卡片内容本身就是主要信息，默认展开（用户手动折叠后以 overrides 为准）
+ */
+function defaultOpenTool(name: string): boolean {
+  return /^(edit|multiedit)$/i.test(name)
+}
+
+/**
  * AssistantParts
  * 参数：message 消息（assistant/system/tool）
  * 核心流程：计算"最后一个未完成的 tool_call"作为唯一自动展开项；
@@ -385,15 +395,21 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const key = `tool:${tc.id ?? index()}`
               // agent 卡片只在真正运行时自动展开，已完成的历史记录默认收起，避免刷屏
               const autoOpen = () => key === `tool:${runningToolId()}` && (name !== "agent" || (!tc.finished && !result))
-              const open = () => overrides()[key] ?? autoOpen()
+              const open = () => overrides()[key] ?? (autoOpen() || defaultOpenTool(name))
               // 按 id 找同消息内对应 result 合并展示
               const inlineResult = props.message.parts.find((p) => {
                 if (p.type !== "tool_result") return false
                 return ((p.data ?? {}) as ToolResultPartData).tool_call_id === tc.id
               })
               const inlineData = inlineResult ? ((inlineResult.data ?? {}) as ToolResultPartData) : undefined
-              // agent 结果通常在后续 tool 消息中：从会话级结果表补齐，才能停掉转圈并展示最终答复
-              const result = name === "agent" && tc.id ? (subagent?.toolResults().get(tc.id) ?? inlineData) : inlineData
+              // edit 结果在后续 tool 消息中：从会话级结果表补齐，避免调用与结果拆成两张卡片
+              const crossResult =
+                tc.id && defaultOpenTool(name) ? subagent?.toolResults().get(tc.id) : undefined
+              // agent 结果同样跨消息：从会话级结果表补齐，才能停掉转圈并展示最终答复
+              const result =
+                name === "agent" && tc.id
+                  ? (subagent?.toolResults().get(tc.id) ?? inlineData)
+                  : (crossResult ?? inlineData)
               if (name === "agent") {
                 return (
                   <SubagentCard
@@ -422,12 +438,17 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const tr = data as ToolResultPartData
               // todos 由 Todo Dock 统一展示；agent 结果由上方 SubagentCard 跨消息合并，避免重复卡片
               if ((tr.name || "") === "todos" || (tr.name || "") === "agent") return null
+              // 结果消息只带 tool_call_id：反查原始调用，edit 类卡片据此展示文件路径等参数
+              const origin = tr.tool_call_id ? subagent?.toolCalls().get(tr.tool_call_id) : undefined
+              const name = tr.name || origin?.name || "tool"
+              // edit 结果已合并进调用卡片：跳过独立结果卡，避免同一操作出现两张卡片
+              if (origin && defaultOpenTool(name)) return null
               const resultKey = `result:${index()}`
-              const resultOpen = () => overrides()[resultKey] ?? false
+              const resultOpen = () => overrides()[resultKey] ?? defaultOpenTool(name)
               return (
                 <ToolCard
-                  name={tr.name || "tool"}
-                  inputRaw={undefined}
+                  name={name}
+                  inputRaw={/^(edit|multiedit)$/i.test(name) ? origin?.input : undefined}
                   finished={true}
                   result={tr}
                   open={resultOpen()}
@@ -469,7 +490,8 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
 /**
  * ReasoningBlock
  * 参数：open 展开态；streaming 是否流式生成中；thinking 思考文本；onToggle 点击回调
- * 核心流程：标题行 Thinking + 脉冲圆点（流式）+ 箭头；展开区显示灰暗小字思考文本（限高滚动）
+ * 核心流程：标题行 Thinking + 脉冲圆点（流式）+ 箭头；展开区显示灰暗小字思考文本
+ *           （预览贴底，流式时始终可见最新 10 行）
  */
 function ReasoningBlock(props: { open: boolean; streaming: boolean; thinking: string; onToggle: () => void }) {
   return (
@@ -502,6 +524,7 @@ function ReasoningBlock(props: { open: boolean; streaming: boolean; thinking: st
             offset={16}
             expandedMaxHeight={420}
             tone="muted"
+            anchor="bottom"
             class="px-2.5 py-2 text-[12px] leading-[18px] whitespace-pre-wrap break-words"
           >
             {props.thinking}
@@ -517,7 +540,8 @@ function ReasoningBlock(props: { open: boolean; streaming: boolean; thinking: st
  * 参数：name 工具名；inputRaw 原始 input；finished 是否完成；result 合并的 result（可无）；
  *       open 展开态；onToggle 点击回调
  * 核心流程：头部（图标+名称+摘要+脉冲点/箭头）可点击展开；
- *           展开区显示格式化 input JSON 与 result content（等宽、限高 320px 滚动）；
+ *           edit/multiedit 展开态展示左右两栏 Before/After 对比；
+ *           其余工具展示格式化 input JSON 与 result content（等宽、限高 320px 滚动）；
  *           result.is_error 时标题行标红
  */
 function ToolCard(props: {
@@ -529,7 +553,13 @@ function ToolCard(props: {
   onToggle: () => void
 }) {
   const hasError = () => props.result?.is_error === true
-  const hasBody = () => !!props.inputRaw || !!props.result?.content
+  // edit/multiedit 展开时改用左右对比视图：取 metadata 的整文件前后内容
+  const editDiff = createMemo(() =>
+    props.open && !hasError() && /^(edit|multiedit)$/i.test(props.name)
+      ? parseEditDiff(props.inputRaw, props.result?.metadata)
+      : undefined,
+  )
+  const hasBody = () => !!props.inputRaw || !!props.result?.content || !!editDiff()
   return (
     <div class="overflow-hidden rounded-[8px] border border-edge bg-base transition-colors hover:bg-raised/60">
       <button
@@ -560,15 +590,24 @@ function ToolCard(props: {
       </button>
       <Show when={props.open && hasBody()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
-          <Show when={props.inputRaw}>
-            <ClampedPreview lineHeight={18} offset={16}>
-              <pre class="md-pre">{formatJson(props.inputRaw)}</pre>
-            </ClampedPreview>
-          </Show>
-          <Show when={props.result?.content}>
-            <ClampedPreview lineHeight={18} offset={16}>
-              <pre class="md-pre" classList={{ "text-[#e5484d]": hasError() }}>{props.result?.content}</pre>
-            </ClampedPreview>
+          <Show
+            when={editDiff()}
+            fallback={
+              <>
+                <Show when={props.inputRaw}>
+                  <ClampedPreview lineHeight={18} offset={16}>
+                    <pre class="md-pre">{formatJson(props.inputRaw)}</pre>
+                  </ClampedPreview>
+                </Show>
+                <Show when={props.result?.content}>
+                  <ClampedPreview lineHeight={18} offset={16}>
+                    <pre class="md-pre" classList={{ "text-[#e5484d]": hasError() }}>{props.result?.content}</pre>
+                  </ClampedPreview>
+                </Show>
+              </>
+            }
+          >
+            {(diff) => <EditDiff data={diff()} />}
           </Show>
         </div>
       </Show>

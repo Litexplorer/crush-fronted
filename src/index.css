@@ -539,6 +539,11 @@ body {
   background: linear-gradient(to top, var(--bg-base), transparent);
 }
 
+/* ClampedPreview 顶部渐隐：贴底预览时提示上方还有内容 */
+.clamped-fade-top {
+  background: linear-gradient(to bottom, var(--bg-base), transparent);
+}
+
 /* 正文代码块默认 10 行预览（markdown.tsx 增强后加 data-code-clamp） */
 .md-body .md-code[data-code-clamp="collapsed"] {
   position: relative;

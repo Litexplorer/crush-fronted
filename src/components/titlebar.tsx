@@ -15,12 +15,14 @@ import {
   closeSessionTab,
   ensureSessionTab,
   openSessions,
+  reorderSessionTabs,
   retargetSessionTabs,
   setActiveSession,
   setTheme,
   theme,
   type ActiveSession,
 } from "../lib/ui-store"
+import { workspaceColor } from "../lib/workspace-color"
 import StatusPopover from "./status-popover"
 
 type ConnectionState = "connected" | "disconnected"
@@ -68,6 +70,8 @@ export default function Titlebar() {
   // 当前路由对应的会话标签：用于高亮与工作区回退
   const currentSessionId = () => routeSessionId(location.pathname)
   const currentTab = () => openSessions().find((tab) => tab.id === currentSessionId())
+  // 工作区配色键：项目路径优先，旧标签缺失路径时退化为 workspace id
+  const tabColor = (tab: ActiveSession) => workspaceColor(tab.projectPath ?? tab.workspaceId)
   // 状态浮层数据源：当前会话所属工作区，回退到首页选中项
   const statusWsId = () => currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
 
@@ -77,6 +81,9 @@ export default function Titlebar() {
   const [canLeft, setCanLeft] = createSignal(false)
   const [canRight, setCanRight] = createSignal(false)
   const [tabsMenu, setTabsMenu] = createSignal(false)
+  // 标签拖拽排序：draggingTabId 拖拽源，dropTarget 落点（after 表示插到目标右侧）
+  const [draggingTabId, setDraggingTabId] = createSignal("")
+  const [dropTarget, setDropTarget] = createSignal<{ id: string; after: boolean }>()
   const [pickerOpen, setPickerOpen] = createSignal(false)
   const [pickerLoading, setPickerLoading] = createSignal(false)
   const [pickerError, setPickerError] = createSignal("")
@@ -270,6 +277,61 @@ export default function Titlebar() {
     else navigate(`/w/${encodeURIComponent(tab.workspaceId)}`)
   }
 
+  /**
+   * startTabDrag
+   * 参数：event 拖拽事件；tab 被拖拽标签
+   * 核心流程：记录拖拽源并写入 dataTransfer，供 drop 时跨元素取回
+   */
+  function startTabDrag(event: DragEvent, tab: ActiveSession) {
+    setDraggingTabId(tab.id)
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move"
+      event.dataTransfer.setData("text/plain", tab.id)
+    }
+  }
+
+  /**
+   * overTab
+   * 参数：event 拖拽事件；tab 当前悬停的标签
+   * 核心流程：阻止默认行为以允许 drop，并按鼠标在目标左/右半区计算插入侧
+   */
+  function overTab(event: DragEvent, tab: ActiveSession) {
+    const sourceId = draggingTabId()
+    if (!sourceId || sourceId === tab.id) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move"
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const after = event.clientX > rect.left + rect.width / 2
+    const current = dropTarget()
+    if (!current || current.id !== tab.id || current.after !== after) setDropTarget({ id: tab.id, after })
+  }
+
+  /**
+   * dropTab
+   * 参数：event drop 事件；tab 落点标签
+   * 核心流程：取拖拽源与落点侧 → 调用 store 重排并持久化 → 清空拖拽态
+   */
+  function dropTab(event: DragEvent, tab: ActiveSession) {
+    event.preventDefault()
+    const sourceId = event.dataTransfer?.getData("text/plain") || draggingTabId()
+    const target = dropTarget()
+    if (sourceId && sourceId !== tab.id) {
+      reorderSessionTabs(sourceId, tab.id, target?.id === tab.id ? target.after : true)
+    }
+    setDraggingTabId("")
+    setDropTarget(undefined)
+  }
+
+  /**
+   * endTabDrag
+   * 参数：无
+   * 核心流程：拖拽结束（包括拖出标签条）时清空高亮与插入指示
+   */
+  function endTabDrag() {
+    setDraggingTabId("")
+    setDropTarget(undefined)
+  }
+
   return (
     <header class="flex h-9 shrink-0 flex-row items-center justify-between gap-2 border-b border-edge bg-deep pl-1.5 pr-2">
       <div class="relative flex min-w-0 flex-1 items-center gap-1">
@@ -318,12 +380,36 @@ export default function Titlebar() {
             {(tab) => (
               <div
                 data-session-tab={tab.id}
-                class="group flex h-[26px] max-w-[220px] min-w-0 shrink-0 items-center rounded-[6px] pr-1 transition-colors"
+                draggable={true}
+                onDragStart={(event) => startTabDrag(event, tab)}
+                onDragOver={(event) => overTab(event, tab)}
+                onDragLeave={() => {
+                  if (dropTarget()?.id === tab.id) setDropTarget(undefined)
+                }}
+                onDrop={(event) => dropTab(event, tab)}
+                onDragEnd={endTabDrag}
+                class="group relative flex h-[26px] max-w-[220px] min-w-0 shrink-0 items-center rounded-[6px] pr-1 transition-colors"
                 classList={{
                   "bg-raised text-text": currentSessionId() === tab.id,
                   "text-muted hover:bg-raised/60": currentSessionId() !== tab.id,
+                  "opacity-40": draggingTabId() === tab.id,
                 }}
+                style={{ "background-color": currentSessionId() === tab.id ? tabColor(tab)?.tint : undefined }}
               >
+                {/* 拖拽插入位：按落点落在目标左侧或右侧绘制竖线 */}
+                <Show when={dropTarget()?.id === tab.id}>
+                  <span
+                    aria-hidden="true"
+                    class="pointer-events-none absolute top-0 bottom-0 w-[2px] rounded-full bg-accent"
+                    classList={{ "left-0": dropTarget()?.after === false, "right-0": dropTarget()?.after === true }}
+                  />
+                </Show>
+                {/* 工作区色条：同一工作区固定同色，跨 tab 快速识别 */}
+                <span
+                  aria-hidden="true"
+                  class="ml-1 h-3 w-[3px] shrink-0 rounded-full"
+                  style={{ "background-color": tabColor(tab)?.solid ?? "transparent" }}
+                />
                 <button
                   type="button"
                   class="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-left"
@@ -393,13 +479,20 @@ export default function Titlebar() {
                     <div class="flex items-center gap-1 px-1">
                       <button
                         type="button"
-                        class="flex min-w-0 flex-1 items-center rounded-[4px] px-2 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                        class="flex min-w-0 flex-1 items-center gap-2 rounded-[4px] px-2 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
                         classList={{ "bg-raised text-text": currentSessionId() === tab.id }}
+                        style={{ "background-color": currentSessionId() === tab.id ? tabColor(tab)?.tint : undefined }}
                         onClick={() => {
                           setTabsMenu(false)
                           void openTab(tab)
                         }}
                       >
+                        {/* 与顶栏一致的工作区色点 */}
+                        <span
+                          aria-hidden="true"
+                          class="size-1.5 shrink-0 rounded-full"
+                          style={{ "background-color": tabColor(tab)?.solid ?? "transparent" }}
+                        />
                         <span class="min-w-0 flex-1 truncate">{tab.title || "Untitled"}</span>
                       </button>
                       <button
