@@ -10,7 +10,10 @@ import { useNavigate, useParams } from "@solidjs/router"
 import {
   createWorkspace,
   deleteWorkspace,
+  forgetProjectOnServer,
+  listProjects,
   listWorkspaces,
+  type Project,
   type Workspace,
 } from "../lib/workspaces"
 import { createSession, listSessions, type Session } from "../lib/sessions"
@@ -47,15 +50,15 @@ function isRecentProject(ws: Workspace): boolean {
 
 /**
  * mergeProjects
- * 参数：live 后端当前存活的工作区
- * 核心流程：按最近打开顺序合并本地记录 —— 存活项目用真实 id，
- *           已失效项目用 recent: 占位，点击时再按路径重建
+ * 参数：live 后端当前存活的工作区；saved 服务端落盘记住的项目
+ * 核心流程：按本地最近打开 → 服务端记录 → 存活工作区的顺序去重合并 ——
+ *           存活项目用真实 id，已失效项目用 recent: 占位，点击时再按路径重建
  */
-function mergeProjects(live: Workspace[]): Workspace[] {
+function mergeProjects(live: Workspace[], saved: Project[] = []): Workspace[] {
   const liveByPath = new Map(live.map((ws) => [ws.path, ws]))
   const seen = new Set<string>()
   const merged: Workspace[] = []
-  for (const path of recentProjectPaths()) {
+  for (const path of [...recentProjectPaths(), ...saved.map((p) => p.path)]) {
     if (seen.has(path)) continue
     seen.add(path)
     merged.push(liveByPath.get(path) ?? { id: `${RECENT_PROJECT_PREFIX}${path}`, path })
@@ -119,13 +122,17 @@ export default function Home() {
   /**
    * loadWorkspaces
    * 参数：无
-   * 核心流程：GET /workspaces → 成功写列表并进入 ready；失败记文案进入 error
+   * 核心流程：并行拉取存活 workspace 与服务端落盘项目 → 合并去重写入列表并进入 ready；
+   *           项目接口失败时降级为仅本地记录
    */
   async function loadWorkspaces() {
     setLoadState("loading")
     try {
-      // 拉取列表：成功即视为就绪
-      const data = await listWorkspaces()
+      // 拉取列表：存活工作区 + 服务端记住的项目（后者失败不影响主流程）
+      const [data, saved] = await Promise.all([
+        listWorkspaces(),
+        listProjects().catch(() => [] as Project[]),
+      ])
       // 服务重启后列表为空：按上次打开的路径重建工作区，恢复会话入口
       if (data.length === 0) {
         const path = recalledWorkspacePath()
@@ -133,14 +140,14 @@ export default function Home() {
           // 重建上次打开的项目时带上本地 YOLO 缓存，避免权限模式被重置为关闭
           const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
           rememberWorkspace(ws)
-          setWorkspaces(mergeProjects([ws]))
+          setWorkspaces(mergeProjects([ws], saved))
           setSelectedWorkspace(ws)
           setLoadState("ready")
           navigate(`/w/${encodeURIComponent(ws.id)}`)
           return
         }
       }
-      setWorkspaces(mergeProjects(data))
+      setWorkspaces(mergeProjects(data, saved))
       setLoadState("ready")
     } catch (err) {
       setLoadError(errorMessage(err))
@@ -202,6 +209,8 @@ export default function Home() {
     // 本地记录占位：仅从最近项目移除，无需请求后端
     if (isRecentProject(target)) {
       forgetProject(target.path)
+      // 同步清掉服务端记录，避免刷新后重新出现
+      void forgetProjectOnServer(target.path).catch(() => undefined)
       setDeleteTarget(undefined)
       setWorkspaces((prev) => prev.filter((item) => item.id !== target.id))
       return
@@ -210,6 +219,8 @@ export default function Home() {
       // 删除工作区：带 client_id 查询参数
       await deleteWorkspace(target.id)
       forgetProject(target.path)
+      // 同步清掉服务端记录，避免刷新后重新出现
+      void forgetProjectOnServer(target.path).catch(() => undefined)
       setDeleteTarget(undefined)
       // 删中的是选中项：清空选中并回退到 /（避免 URL 残留失效 id）
       if (selectedWorkspace()?.id === target.id) {
@@ -303,6 +314,38 @@ function ProjectsPanel(props: {
   onOpenSettings: () => void
   onUnavailable: () => void
 }) {
+  // 折叠阈值：项目过多时先展示前 N 条，避免左栏被历史项目淹没
+  const COLLAPSED_LIMIT = 8
+  const [query, setQuery] = createSignal("")
+  const [expanded, setExpanded] = createSignal(false)
+
+  /**
+   * filtered
+   * 参数：无（读取 query 与 props.workspaces）
+   * 核心流程：按关键字匹配项目路径或展示名，不区分大小写
+   */
+  const filtered = createMemo(() => {
+    const q = query().trim().toLowerCase()
+    if (!q) return props.workspaces
+    return props.workspaces.filter(
+      (ws) => ws.path.toLowerCase().includes(q) || basename(ws.path).toLowerCase().includes(q),
+    )
+  })
+
+  /**
+   * visible
+   * 参数：无
+   * 核心流程：有过滤条件或已展开时铺满结果，否则只显示前 COLLAPSED_LIMIT 条
+   */
+  const visible = createMemo(() => {
+    const list = filtered()
+    if (query().trim() !== "" || expanded()) return list
+    return list.slice(0, COLLAPSED_LIMIT)
+  })
+
+  /** 被折叠的条数：0 表示无需展示展开按钮 */
+  const hiddenCount = createMemo(() => filtered().length - visible().length)
+
   return (
     <aside class="flex w-full shrink-0 flex-col lg:w-[280px]">
       <div class="flex h-7 shrink-0 items-center justify-between pl-1 pr-1">
@@ -319,6 +362,36 @@ function ProjectsPanel(props: {
             <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
           </svg>
         </button>
+      </div>
+
+      {/* 关键字过滤：同时匹配项目路径与展示名 */}
+      <div class="mt-2 flex h-8 shrink-0 items-center gap-2 rounded-[6px] bg-raised px-2">
+        <svg viewBox="0 0 16 16" class="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="7" cy="7" r="4.2" />
+          <path d="M10.2 10.2 13 13" stroke-linecap="round" />
+        </svg>
+        <input
+          type="text"
+          spellcheck={false}
+          value={query()}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+          placeholder="Filter projects"
+          aria-label="Filter projects"
+          class="min-w-0 flex-1 bg-transparent text-[12px] text-text outline-none placeholder:text-faint"
+        />
+        <Show when={query() !== ""}>
+          <button
+            type="button"
+            aria-label="Clear filter"
+            title="Clear filter"
+            class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-faint transition-colors hover:bg-edge hover:text-text"
+            onClick={() => setQuery("")}
+          >
+            <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </Show>
       </div>
 
       <div class="mt-2 min-h-0 flex-1 overflow-y-auto">
@@ -341,42 +414,57 @@ function ProjectsPanel(props: {
             when={props.workspaces.length > 0}
             fallback={<div class="px-1.5 py-3 text-[13px] leading-5 text-faint">No projects yet.</div>}
           >
-            <div class="flex flex-col gap-0.5">
-              <For each={props.workspaces}>
-                {(ws) => (
-                  <div
-                    class="group relative flex min-w-0 items-center rounded-[6px]"
-                    classList={{ "bg-raised": props.selectedId === ws.id }}
-                  >
-                    <button
-                      type="button"
-                      class="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-[6px] pl-1.5 pr-1 text-left transition-colors hover:bg-raised/60"
-                      onClick={() => props.onSelect(ws)}
-                      title={ws.path}
+            <Show
+              when={filtered().length > 0}
+              fallback={<div class="px-1.5 py-3 text-[13px] leading-5 text-faint">No matching projects.</div>}
+            >
+              <div class="flex flex-col gap-0.5">
+                <For each={visible()}>
+                  {(ws) => (
+                    <div
+                      class="group relative flex min-w-0 items-center rounded-[6px]"
+                      classList={{ "bg-raised": props.selectedId === ws.id }}
                     >
-                      {/* 项目图标：2px 圆角方块 + 首字母 */}
-                      <span class="flex size-5 shrink-0 items-center justify-center rounded-[4px] bg-edge text-[10px] font-semibold text-text">
-                        {initial(basename(ws.path))}
-                      </span>
-                      <span class="min-w-0 flex-1 truncate text-[13px] text-text">{basename(ws.path)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${basename(ws.path)}`}
-                      class="mr-1 hidden size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors group-hover:flex hover:bg-edge hover:text-text"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        props.onRequestDelete(ws)
-                      }}
-                    >
-                      <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M3 4h10M6.5 4V3h3v1M5 4l.5 9h5L11 4" stroke-linecap="round" stroke-linejoin="round" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-              </For>
-            </div>
+                      <button
+                        type="button"
+                        class="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-[6px] pl-1.5 pr-1 text-left transition-colors hover:bg-raised/60"
+                        onClick={() => props.onSelect(ws)}
+                        title={ws.path}
+                      >
+                        {/* 项目图标：2px 圆角方块 + 首字母 */}
+                        <span class="flex size-5 shrink-0 items-center justify-center rounded-[4px] bg-edge text-[10px] font-semibold text-text">
+                          {initial(basename(ws.path))}
+                        </span>
+                        <span class="min-w-0 flex-1 truncate text-[13px] text-text">{basename(ws.path)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${basename(ws.path)}`}
+                        class="mr-1 hidden size-5 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors group-hover:flex hover:bg-edge hover:text-text"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          props.onRequestDelete(ws)
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M3 4h10M6.5 4V3h3v1M5 4l.5 9h5L11 4" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+              {/* 折叠入口：过滤中不折叠，避免命中项被藏起来 */}
+              <Show when={query().trim() === "" && (expanded() || hiddenCount() > 0)}>
+                <button
+                  type="button"
+                  class="mt-1 flex h-7 w-full items-center justify-center rounded-[6px] text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                  onClick={() => setExpanded((v) => !v)}
+                >
+                  {expanded() ? "Show less" : `Show all ${filtered().length} projects`}
+                </button>
+              </Show>
+            </Show>
           </Show>
         </Show>
       </div>
