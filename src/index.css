@@ -519,6 +519,134 @@ body {
   font-size: 10px;
 }
 
+/* Markmap 思维导图：容器与工具栏沿用 Mermaid 的视觉 */
+.md-body .markmap-block {
+  margin: 0.55em 0;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.md-body .markmap-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: color-mix(in srgb, var(--text-base) 2%, transparent);
+}
+
+.md-body .markmap-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.md-body .markmap-bar button {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.md-body .markmap-bar button:hover {
+  background: var(--bg-raised);
+  color: var(--text-base);
+}
+
+.md-body .markmap-source {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--md-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-base);
+  white-space: pre;
+}
+
+.md-body .markmap-source code {
+  font: inherit;
+}
+
+/* 固定高度：Markmap 依赖容器的实际尺寸做布局，高度随内容变化会反复触发重排 */
+.md-body .markmap-diagram {
+  height: 380px;
+  padding: 8px;
+  touch-action: none;
+}
+
+.md-body .markmap-diagram svg,
+.markmap-canvas svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.md-body .markmap-diagram svg:active,
+.markmap-canvas svg:active {
+  cursor: grabbing;
+}
+
+/* 覆盖 Markmap 自带的全局配色，跟随应用主题（代码块与消息级按钮共用） */
+svg.markmap-svg.markmap {
+  --markmap-text-color: var(--text-base);
+  --markmap-code-bg: var(--bg-raised);
+  --markmap-code-color: var(--text-base);
+  --markmap-a-color: #4dabf7;
+  --markmap-circle-open-bg: var(--bg-deep);
+  --markmap-highlight-node-bg: #ff02;
+  --markmap-font: 400 13px/18px Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+/* 源码态与渲染中只展示其中一侧，避免容器塌陷影响滚动测量 */
+.md-body .markmap-block[data-state="source"] .markmap-diagram,
+.md-body .markmap-block[data-state="error"] .markmap-diagram {
+  display: none;
+}
+
+.md-body .markmap-block[data-state="rendering"] .markmap-source {
+  display: none;
+}
+
+.md-body .markmap-block[data-state="ready"] .markmap-source {
+  display: none;
+}
+
+.md-body .markmap-block[data-state="ready"][data-view="source"] .markmap-source {
+  display: block;
+}
+
+.md-body .markmap-block[data-state="ready"][data-view="source"] .markmap-diagram {
+  display: none;
+}
+
+.md-body .markmap-block:not([data-state="ready"]) .markmap-bar button {
+  display: none;
+}
+
+.md-body .markmap-block[data-state="rendering"] .markmap-bar::after {
+  content: "Rendering…";
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.md-body .markmap-block[data-state="error"] .markmap-bar::after {
+  content: "Mindmap render error";
+  margin-left: auto;
+  color: #e5484d;
+  font-size: 10px;
+}
+
 /* 工具输出 / shell 输出等宽块（parts.tsx）；高度由 ClampedPreview 控制 */
 .md-pre {
   margin: 0;

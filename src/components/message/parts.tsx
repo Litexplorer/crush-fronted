@@ -15,6 +15,7 @@ import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Sw
 import type { ContentPart, SessionMessage } from "../../lib/sessions"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
+import { MindmapText } from "./mindmap-text"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
@@ -387,7 +388,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
             case "text": {
               const text = partText(part)
               if (!text) return null
-              return <MarkdownText text={text} streaming={isStreaming()} />
+              return <MindmapText text={text} streaming={isStreaming()} />
             }
             case "reasoning": {
               const r = data as ReasoningPartData

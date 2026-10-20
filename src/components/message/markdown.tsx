@@ -12,6 +12,7 @@ import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/common"
 import katex from "katex"
 import { looksLikeCallChain, renderCallChainHtml } from "../../lib/call-chain"
+import { renderMarkmap } from "../../lib/markmap"
 import { renderMermaid } from "../../lib/mermaid"
 import { theme, type Theme } from "../../lib/ui-store"
 
@@ -41,6 +42,15 @@ const CALL_CHAIN_LANGS = new Set(["callchain", "call-chain", "callstack", "chain
  */
 function renderMermaidPlaceholder(text: string): string {
   return `<div class="mermaid-block" data-mermaid data-state="source" data-view="diagram"><div class="mermaid-bar"><span class="mermaid-label">Mermaid</span><button type="button" data-mermaid-action="source">Source</button></div><pre class="mermaid-source"><code class="language-mermaid">${escapeHtml(text)}</code></pre><div class="mermaid-diagram" role="img" aria-label="Mermaid diagram"></div></div>`
+}
+
+/**
+ * renderMarkmapPlaceholder
+ * 参数：text Markdown 原文
+ * 核心流程：输出源码区 + 空图表容器；图表由 Markmap 在清洗后接管
+ */
+function renderMarkmapPlaceholder(text: string): string {
+  return `<div class="markmap-block" data-markmap data-state="source" data-view="diagram"><div class="markmap-bar"><span class="markmap-label">Mindmap</span><button type="button" data-markmap-action="source">Source</button></div><pre class="markmap-source"><code class="language-markdown">${escapeHtml(text)}</code></pre><div class="markmap-diagram"></div></div>`
 }
 
 /** 数学公式 token：text 为 TeX 源码，displayMode 控制行内/块级 */
@@ -207,6 +217,7 @@ marked.use({
     code({ text, lang }: Tokens.Code): string {
       const language = (lang ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? ""
       if (language === "mermaid") return renderMermaidPlaceholder(text)
+      if (language === "markmap" || language === "mindmap") return renderMarkmapPlaceholder(text)
       const plainLanguage = !language || language === "text" || language === "plaintext"
       if (CALL_CHAIN_LANGS.has(language) || (plainLanguage && looksLikeCallChain(text))) {
         const html = renderCallChainHtml(text)
@@ -285,6 +296,16 @@ function handleMarkdownClick(e: MouseEvent) {
     const showingSource = block.dataset.view === "source"
     block.dataset.view = showingSource ? "diagram" : "source"
     mermaidAction.textContent = showingSource ? "Source" : "Diagram"
+    return
+  }
+
+  const markmapAction = target?.closest<HTMLElement>("[data-markmap-action]")
+  if (markmapAction) {
+    const block = markmapAction.closest<HTMLElement>("[data-markmap]")
+    if (!block || block.dataset.state !== "ready") return
+    const showingSource = block.dataset.view === "source"
+    block.dataset.view = showingSource ? "diagram" : "source"
+    markmapAction.textContent = showingSource ? "Source" : "Diagram"
     return
   }
 
@@ -395,6 +416,34 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   const html = createMemo(() => renderMarkdown(props.text))
   let rootRef: HTMLDivElement | undefined
   let renderSeq = 0
+  /** 当前挂载的 Markmap 销毁函数：文本或主题变化时统一释放 */
+  const markmapCleanups = new Set<() => void>()
+
+  /**
+   * destroyMarkmaps
+   * 核心流程：逐个调用销毁函数，清空集合；Markmap 内部持有 ResizeObserver 与 d3 缩放监听
+   */
+  function destroyMarkmaps() {
+    markmapCleanups.forEach((dispose) => dispose())
+    markmapCleanups.clear()
+  }
+
+  /**
+   * resetMarkmapBlocks
+   * 参数：root Markdown 根节点
+   * 核心流程：先释放旧实例，再把每个块恢复源码态与按钮文案，清空图表容器
+   */
+  function resetMarkmapBlocks(root: HTMLElement) {
+    destroyMarkmaps()
+    root.querySelectorAll<HTMLElement>("[data-markmap]").forEach((block) => {
+      block.dataset.state = "source"
+      block.dataset.view = "diagram"
+      const toggle = block.querySelector<HTMLButtonElement>("[data-markmap-action]")
+      if (toggle) toggle.textContent = "Source"
+      const diagram = block.querySelector<HTMLElement>(".markmap-diagram")
+      if (diagram) diagram.replaceChildren()
+    })
+  }
 
   /**
    * renderMermaidBlocks
@@ -431,6 +480,39 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
     }
   }
 
+  /**
+   * renderMarkmapBlocks
+   * 参数：root 容器；seq 本次渲染序号；currentTheme 当前主题
+   * 核心流程：串行把每个占位交给 Markmap 布局，成功后标记 ready；
+   *           序号失效时销毁刚建好的实例，避免残留缩放监听
+   */
+  async function renderMarkmapBlocks(root: HTMLElement, seq: number, currentTheme: Theme) {
+    const blocks = [...root.querySelectorAll<HTMLElement>("[data-markmap]")]
+    for (const block of blocks) {
+      if (seq !== renderSeq || !block.isConnected) return
+      const source = block.querySelector<HTMLElement>(".markmap-source code")?.textContent ?? ""
+      const diagram = block.querySelector<HTMLElement>(".markmap-diagram")
+      if (!source.trim() || !diagram) {
+        block.dataset.state = "error"
+        continue
+      }
+
+      block.dataset.state = "rendering"
+      try {
+        const dispose = await renderMarkmap(diagram, source, currentTheme)
+        if (seq !== renderSeq || !block.isConnected) {
+          dispose()
+          return
+        }
+        markmapCleanups.add(dispose)
+        block.dataset.state = "ready"
+      } catch {
+        if (seq !== renderSeq) return
+        block.dataset.state = "error"
+      }
+    }
+  }
+
   createEffect(
     on(
       [html, () => props.streaming === true, theme],
@@ -444,10 +526,12 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
         queueMicrotask(() => {
           if (seq !== renderSeq || !root.isConnected) return
           resetMermaidBlocks(root)
+          resetMarkmapBlocks(root)
           renderMathBlocks(root)
           applyCodeClamps(root, streaming)
           if (streaming) return
           void renderMermaidBlocks(root, seq, currentTheme)
+          void renderMarkmapBlocks(root, seq, currentTheme)
         })
       },
     ),
@@ -455,6 +539,7 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
 
   onCleanup(() => {
     renderSeq++
+    destroyMarkmaps()
   })
 
   return (
