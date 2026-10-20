@@ -28,10 +28,41 @@ type DiffRow =
   | { kind: "pair"; left: DiffCell | null; right: DiffCell | null; changed: boolean }
 
 /**
+ * parseEditsDiff
+ * 参数：input multiedit 的输入对象（file_path + edits 数组）；filePath 展示用路径
+ * 核心流程：把每条 edit 的 old_string/new_string 按行拼成前后两份文本，
+ *           使 structuredPatch 能逐条产出独立的变更块（用于 metadata 缺失时的兜底）；
+ *           全部 old_string 为空（新建文件）时前文本留空，呈现纯新增
+ */
+function parseEditsDiff(input: Record<string, unknown>, filePath: string): EditDiffData | undefined {
+  const edits = Array.isArray(input.edits) ? input.edits : undefined
+  if (!edits || edits.length === 0) return undefined
+  const oldParts: string[] = []
+  const newParts: string[] = []
+  for (const item of edits) {
+    if (!item || typeof item !== "object") continue
+    const op = item as Record<string, unknown>
+    const oldString = typeof op.old_string === "string" ? op.old_string : ""
+    const newString = typeof op.new_string === "string" ? op.new_string : ""
+    if (oldString === "" && newString === "") continue
+    oldParts.push(oldString)
+    newParts.push(newString)
+  }
+  if (oldParts.length === 0) return undefined
+  // 每条片段补齐换行后再拼接：行数一一对应，diff 逐条产出独立变更块，且不出现「No newline」噪声行
+  const terminate = (part: string) => (part === "" || part.endsWith("\n") ? part : `${part}\n`)
+  const oldContent = oldParts.every((part) => part === "") ? "" : oldParts.map(terminate).join("")
+  const newContent = newParts.map(terminate).join("")
+  if (oldContent === newContent) return undefined
+  return { filePath, oldContent, newContent }
+}
+
+/**
  * parseEditDiff
  * 参数：inputRaw 工具输入 JSON；metadata tool_result 的 metadata 字符串
  * 核心流程：优先用 metadata 的整文件 old_content/new_content（可展示真实行号与上下文）；
- *           结果尚未返回时回退到输入里的 old_string/new_string（仅展示替换片段）；
+ *           结果尚未返回时回退到输入：edit 取 old_string/new_string，
+ *           multiedit 取 edits 数组逐条拼接（仅展示替换片段）；
  *           两者都没有则返回 undefined，由调用方回退原始 JSON 视图
  */
 export function parseEditDiff(inputRaw: string | undefined, metadata: string | undefined): EditDiffData | undefined {
@@ -57,7 +88,7 @@ export function parseEditDiff(inputRaw: string | undefined, metadata: string | u
   if (typeof oldString === "string" && typeof newString === "string" && oldString !== newString) {
     return { filePath, oldContent: oldString, newContent: newString }
   }
-  return undefined
+  return parseEditsDiff(input, filePath)
 }
 
 /**

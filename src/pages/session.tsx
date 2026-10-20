@@ -29,7 +29,8 @@ import SessionPanel from "../components/session-panel"
 import TodoDock from "../components/todo-dock"
 import type { QuestionItem } from "../components/panel-questions"
 import { ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
-import { recalledWorkspacePath, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import VirtualTimeline from "../components/message/virtual-timeline"
+import { recalledWorkspacePath, recalledYolo, rememberWorkspace, rememberYolo, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import { createWorkspace, getWorkspace, type Workspace } from "../lib/workspaces"
 import { workspaceColor } from "../lib/workspace-color"
 import { childSessionId, loadSubagent } from "../lib/subagents"
@@ -240,6 +241,8 @@ export default function Session() {
   const [yolo, setYolo] = createSignal<boolean | undefined>(undefined)
   const [yoloPending, setYoloPending] = createSignal(false)
   const [yoloError, setYoloError] = createSignal("")
+  // YOLO 请求序号：切换工作区时自增，旧请求的响应回来直接丢弃，避免串台
+  let yoloRequestSeq = 0
 
   // Composer 轻提示：附件未支持 / 模型切换失败等一次性文案，2.5s 自动消失
   const [composerToast, setComposerToast] = createSignal("")
@@ -272,11 +275,15 @@ export default function Session() {
   // 问答索引：active 标记当前选中问句（长期），highlight 仅用于消息短暂高亮
   const [activeQuestionId, setActiveQuestionId] = createSignal("")
   const [highlightedMessageId, setHighlightedMessageId] = createSignal("")
+  // 跳转目标：虚拟列表需强制把该消息纳入渲染窗口，滚到位并高亮后清除
+  const [pinnedMessageId, setPinnedMessageId] = createSignal<string>()
 
   let scrollRef: HTMLDivElement | undefined
   let draftRef: HTMLTextAreaElement | undefined
   // 贴近底部标记：用户上翻即停用自动滚动，重新滚到底部附近后恢复
   let stickToBottom = true
+  // 跟随滚动的时间窗：虚拟列表程序化滚底后，滚动监听不再据此判定用户上翻
+  let autoScrollUntil = 0
   let pendingSeq = 0
   // current-session 上报序号：仅最后一次请求生效，避免过期重试覆盖新会话登记
   let reportSeq = 0
@@ -426,7 +433,8 @@ export default function Session() {
         const path = existingTab?.projectPath ?? recalledWorkspacePath()
         if (path) {
           try {
-            const ws = await createWorkspace({ path })
+            // 重建时带上本地缓存的 YOLO：服务端按 args.YOLO 初始化权限模式，重建后不丢开关
+            const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
             rememberWorkspace(ws)
             setSelectedWorkspace(ws)
             retargetSessionTabs(path, ws.id)
@@ -817,19 +825,39 @@ export default function Session() {
   }
 
   /**
+   * workspacePathFor
+   * 参数：wsId workspace ID
+   * 核心流程：按 服务端详情 → 选中工作区 → 标签页缓存 依次解析工作区路径，本地 YOLO 缓存按路径归档
+   */
+  function workspacePathFor(wsId: string): string {
+    const info = workspaceInfo()
+    if (info?.id === wsId && info.path) return info.path
+    const selected = selectedWorkspace()
+    if (selected?.id === wsId && selected.path) return selected.path
+    return openSessions().find((item) => item.workspaceId === wsId)?.projectPath ?? ""
+  }
+
+  /**
    * loadYolo
    * 参数：wsId workspace ID
-   * 核心流程：GET permissions/skip 读取 YOLO 初始状态；失败默认关闭并提示（页面不崩）
+   * 核心流程：先用本地缓存兜底（workspace 被回收重建时不闪回 Off）→ GET permissions/skip 校准；
+   *           响应回来时校验工作区仍为 wsId 且序号最新，过期响应直接丢弃；失败保留缓存值并提示
    */
   async function loadYolo(wsId: string) {
-    setYolo(undefined)
+    const seq = ++yoloRequestSeq
     setYoloError("")
+    const path = workspacePathFor(wsId)
+    const cached = path ? recalledYolo(path) : undefined
+    setYolo(cached)
     try {
-      // 读取工作区级跳过权限开关：成功后映射到本地开关状态
+      // 读取工作区级跳过权限开关：成功后映射到本地开关状态并回写缓存
       const skip = await getSkip(wsId)
+      if (params.workspaceId !== wsId || seq !== yoloRequestSeq) return
       setYolo(skip)
+      if (path) rememberYolo(path, skip)
     } catch (err) {
-      setYolo(false)
+      if (params.workspaceId !== wsId || seq !== yoloRequestSeq) return
+      setYolo(cached ?? false)
       setYoloError(errorMessage(err))
     }
   }
@@ -843,11 +871,16 @@ export default function Session() {
     const wsId = params.workspaceId
     const prev = yolo() === true
     if (!wsId || yoloPending()) return
+    // 作废仍在飞行中的 loadYolo：避免旧 GET 结果回来把刚切换的状态覆盖掉
+    yoloRequestSeq++
     setYolo(!prev)
     setYoloPending(true)
     setYoloError("")
     try {
       await setSkip(wsId, !prev)
+      // 成功后回写按路径的本地缓存：workspace 被回收重建时可回填
+      const path = workspacePathFor(wsId)
+      if (path) rememberYolo(path, !prev)
     } catch (err) {
       // 请求失败：回滚开关并展示后端 message
       setYolo(prev)
@@ -1018,14 +1051,18 @@ export default function Session() {
   /**
    * handleSend
    * 参数：无（读取 draft 输入）
-   * 核心流程：校验就绪与非 busy → 乐观插入本地用户消息（临时 id）→ POST /agent 202 受理；
+   * 核心流程：校验就绪 → 乐观插入本地用户消息（临时 id）→ POST /agent 202 受理；
+   *           运行中发送不传 run_id，后端会把该 prompt 折叠进当前回合的下一步
+   *           （工具调用结束后立即执行），无需等整轮结束；
    *           失败路径：移除乐观消息、恢复输入、输入框上方错误条展示后端 message
    */
   async function handleSend() {
     const wsId = params.workspaceId
     const sid = params.sessionId
     const text = draft().trim()
-    if (!wsId || !sid || !text || busy() || sending() || agentState() !== "ready") return
+    if (!wsId || !sid || !text || sending() || agentState() !== "ready") return
+    // 运行中发送属于插队：run_id 留空，后端在下一步折叠；空闲时生成独立 run id
+    const wasBusy = busy()
 
     // 模型明确不支持图片时直接拦截：后端 preparePrompt 会静默丢弃图片附件
     const pendingImages = images()
@@ -1034,8 +1071,12 @@ export default function Session() {
       return
     }
 
-    // 斜杠命令：/compact 直接触发压缩，不进消息流
+    // 斜杠命令：/compact 直接触发压缩，不进消息流（运行中不允许，避免打断当前回合）
     if (text === "/compact") {
+      if (busy()) {
+        showComposerToast("运行中无法压缩会话，请先停止当前回复")
+        return
+      }
       setDraft("")
       setMentionOpen(false)
       void handleCompact()
@@ -1076,7 +1117,8 @@ export default function Session() {
       await sendMessage(wsId, {
         session_id: sid,
         prompt: text,
-        run_id: newRunId(),
+        // 运行中留空即插队（下一步折叠）；空闲时用独立 run id 关联完成事件
+        run_id: wasBusy ? "" : newRunId(),
         attachments: [
           ...attachments().map((f) => ({
             file_path: f.path,
@@ -1095,7 +1137,8 @@ export default function Session() {
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
       setDraft(text)
       setSendError(errorMessage(err))
-      setBusy(false)
+      // 只有空闲发起时才解除 busy；插队失败不影响已在运行的回合
+      if (!wasBusy) setBusy(false)
     }
     setSending(false)
   }
@@ -1137,6 +1180,8 @@ export default function Session() {
   function handleScroll() {
     const el = scrollRef
     if (!el) return
+    // 跟随滚动的程序化滚动：不参与“用户是否上翻”的判定
+    if (performance.now() < autoScrollUntil) return
     stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
   }
 
@@ -1218,17 +1263,17 @@ export default function Session() {
     ),
   )
 
-  // 自动滚动：消息列表变化时，仅当用户原本贴近底部才滚到最新消息
-  createEffect(() => {
-    messages()
-    if (!stickToBottom) return
-    queueMicrotask(() => {
-      const el = scrollRef
-      if (el) el.scrollTop = el.scrollHeight
-    })
-  })
+  // 自动滚动交由 VirtualTimeline：贴底时消息新增或高度实测后重滚到底部
 
   const title = () => session()?.title || "Untitled"
+
+  // 虚拟列表按 id 渲染：流式分片只替换消息对象，行组件与 DOM 保持复用，避免整卡重建导致闪屏
+  const messageIds = createMemo(() => messages().map((message) => message.id))
+  const messageById = createMemo(() => {
+    const map = new Map<string, TimelineMessage>()
+    for (const message of messages()) map.set(message.id, message)
+    return map
+  })
 
   // 工作区路径：服务端详情优先，其次选中项/当前标签中持久化的项目路径
   const workspacePath = () =>
@@ -1282,27 +1327,38 @@ export default function Session() {
   /**
    * jumpToMessage
    * 参数：messageId 目标消息 id
-   * 核心流程：关闭贴底自动滚动 → 以滚动容器为基准计算锚点位置 → 平滑滚动；
+   * 核心流程：关闭贴底自动滚动 → 用 pin 把目标拉进虚拟列表渲染窗口 → 逐帧校正锚点位置
+   *           （未测量条目的占位高度会在滚动中被实测值替换，需多轮微调直到偏差收敛）；
    *           同步标记索引选中项，并给目标消息 1.6s 高亮
    */
   function jumpToMessage(messageId: string) {
     const container = scrollRef
     if (!container) return
-    const target = document.getElementById(`msg-${messageId}`)
-    if (!target) return
 
     stickToBottom = false
-    const top =
-      target.getBoundingClientRect().top -
-      container.getBoundingClientRect().top +
-      container.scrollTop -
-      16
-    container.scrollTo({ top: Math.max(0, top), behavior: "smooth" })
-
     setActiveQuestionId(messageId)
     setHighlightedMessageId(messageId)
+    setPinnedMessageId(messageId)
     if (highlightTimer) clearTimeout(highlightTimer)
-    highlightTimer = setTimeout(() => setHighlightedMessageId(""), 1600)
+    highlightTimer = setTimeout(() => {
+      setHighlightedMessageId("")
+      setPinnedMessageId(undefined)
+    }, 1600)
+
+    // 目标可能尚未挂载（在视口外）：等 pin 生效渲染出来，再按实际位置反复校正
+    let attempt = 0
+    const settle = () => {
+      const target = document.getElementById(`msg-${messageId}`)
+      if (!target) {
+        if (attempt++ < 10) requestAnimationFrame(settle)
+        return
+      }
+      const delta = target.getBoundingClientRect().top - container.getBoundingClientRect().top - 16
+      if (Math.abs(delta) < 8) return
+      container.scrollTo({ top: Math.max(0, container.scrollTop + delta), behavior: "auto" })
+      if (attempt++ < 10) requestAnimationFrame(settle)
+    }
+    requestAnimationFrame(settle)
   }
 
   const agentHint = () => {
@@ -1396,23 +1452,35 @@ export default function Session() {
           <div class="flex min-h-0 flex-1 flex-col">
             {/* 消息时间线：可滚动区，内容最大宽 1000px 居中（对齐 opencode 2xl） */}
             <div ref={scrollRef} class="min-h-0 flex-1 overflow-y-auto" onScroll={handleScroll}>
-              <div class="mx-auto flex w-full max-w-[1000px] flex-col gap-4 px-4 py-5">
+              <div class="mx-auto flex w-full max-w-[1000px] flex-col px-4 py-5">
                 <Show when={messages().length > 0} fallback={
                   <div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>
                 }>
                   <SubagentProvider store={subagentStore}>
-                    <For each={messages()}>
-                      {(m, i) => (
+                    {/* 时间线虚拟化：仅挂载视口附近的卡片，其余用实测高度占位 */}
+                    <VirtualTimeline
+                      items={messageIds()}
+                      scroll={() => scrollRef}
+                      pin={pinnedMessageId()}
+                      stick={() => stickToBottom}
+                      onAutoScroll={() => {
+                        autoScrollUntil = performance.now() + 150
+                      }}
+                      render={(id, index) => (
                         <div
-                          id={`msg-${m.id}`}
-                          data-message-id={m.id}
+                          id={`msg-${id}`}
+                          data-message-id={id}
                           class="rounded-[12px] transition-shadow"
-                          classList={{ "ring-2 ring-accent/50": highlightedMessageId() === m.id }}
+                          classList={{ "ring-2 ring-accent/50": highlightedMessageId() === id }}
                         >
-                          <MessageItem message={m} showFinish={i() === messages().length - 1} />
+                          <Show when={messageById().get(id)}>
+                            {(message) => (
+                              <MessageItem message={message()} showFinish={index() === messages().length - 1} />
+                            )}
+                          </Show>
                         </div>
                       )}
-                    </For>
+                    />
                     {/* 等待首个 assistant 消息时：在时间线底部展示运行中字符带 */}
                     <Show when={showTurnIndicator()}>
                       <div class="px-1 py-2">
@@ -1674,18 +1742,32 @@ export default function Session() {
                         </button>
                       }
                     >
-                      {/* busy：圆形 Stop（方块），点击中断当前 run */}
-                      <button
-                        type="button"
-                        aria-label="Stop"
-                        title="Stop"
-                        class="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#e5484d] text-white transition-colors hover:bg-[#e5484d]/85"
-                        onClick={() => void handleStop()}
-                      >
-                        <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
-                          <rect x="3" y="3" width="10" height="10" rx="1.5" />
-                        </svg>
-                      </button>
+                      {/* busy：仍可继续输入插队 —— Send 在工具调用结束后并入当前回合；Stop 中断当前 run */}
+                      <div class="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label="Queue message"
+                          title="Send after the current tool call"
+                          class="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={!draft().trim() || agentState() !== "ready" || sending()}
+                          onClick={() => void handleSend()}
+                        >
+                          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Stop"
+                          title="Stop"
+                          class="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#e5484d] text-white transition-colors hover:bg-[#e5484d]/85"
+                          onClick={() => void handleStop()}
+                        >
+                          <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
+                            <rect x="3" y="3" width="10" height="10" rx="1.5" />
+                          </svg>
+                        </button>
+                      </div>
                     </Show>
                   </div>
                 </div>

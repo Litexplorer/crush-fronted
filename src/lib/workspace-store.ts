@@ -9,6 +9,7 @@ import type { Workspace } from "./workspaces"
 
 const WORKSPACE_PATH_KEY = "crush.workspace.path"
 const RECENT_PROJECTS_KEY = "crush.projects"
+const YOLO_KEY = "crush.workspace.yolo"
 const MAX_RECENT_PROJECTS = 20
 
 const [selectedWorkspace, setSelectedWorkspace] = createSignal<Workspace | undefined>(undefined)
@@ -79,6 +80,53 @@ export function forgetProject(path: string) {
     if (localStorage.getItem(WORKSPACE_PATH_KEY) === path) localStorage.removeItem(WORKSPACE_PATH_KEY)
   } catch {
     // localStorage 不可用：跳过持久化
+  }
+}
+
+/**
+ * readYoloMap
+ * 参数：无
+ * 核心流程：读取按项目路径归键的 YOLO 缓存；脏数据/存储不可用时返回空表
+ */
+function readYoloMap(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(YOLO_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {}
+    const out: Record<string, boolean> = {}
+    for (const [path, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (path && typeof value === "boolean") out[path] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * recalledYolo
+ * 参数：path 项目绝对路径
+ * 核心流程：读取该项目上次的 YOLO 开关；无记录（或路径为空）返回 undefined，交给服务端判定
+ */
+export function recalledYolo(path: string): boolean | undefined {
+  if (!path) return undefined
+  return readYoloMap()[path]
+}
+
+/**
+ * rememberYolo
+ * 参数：path 项目绝对路径；yolo 当前 YOLO 开关
+ * 核心流程：按项目路径把开关写入本地缓存，使 workspace 被回收重建后仍能回填 YOLO
+ */
+export function rememberYolo(path: string, yolo: boolean) {
+  if (!path) return
+  try {
+    const map = readYoloMap()
+    map[path] = yolo
+    localStorage.setItem(YOLO_KEY, JSON.stringify(map))
+  } catch {
+    // localStorage 不可用：跳过缓存，仅影响重建后的状态恢复
   }
 }
 

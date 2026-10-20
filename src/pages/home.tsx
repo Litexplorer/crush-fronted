@@ -14,7 +14,7 @@ import {
   type Workspace,
 } from "../lib/workspaces"
 import { createSession, listSessions, type Session } from "../lib/sessions"
-import { forgetProject, recalledWorkspacePath, recentProjectPaths, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import { forgetProject, recalledWorkspacePath, recalledYolo, recentProjectPaths, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import SettingsDialog from "../components/settings-dialog"
 import { listDirs, type FsDirEntry } from "../lib/fs-browser"
 import type { ApiError } from "../lib/http"
@@ -130,7 +130,8 @@ export default function Home() {
       if (data.length === 0) {
         const path = recalledWorkspacePath()
         if (path) {
-          const ws = await createWorkspace({ path })
+          // 重建上次打开的项目时带上本地 YOLO 缓存，避免权限模式被重置为关闭
+          const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
           rememberWorkspace(ws)
           setWorkspaces(mergeProjects([ws]))
           setSelectedWorkspace(ws)
@@ -173,8 +174,8 @@ export default function Home() {
   async function handleSelect(ws: Workspace) {
     if (isRecentProject(ws)) {
       try {
-        // 失效项目：服务端 id 是内存态，按路径重建后替掉占位项
-        const created = await createWorkspace({ path: ws.path })
+        // 失效项目：服务端 id 是内存态，按路径重建后替掉占位项（同时回填 YOLO）
+        const created = await createWorkspace({ path: ws.path, yolo: recalledYolo(ws.path) })
         rememberWorkspace(created)
         setWorkspaces((prev) => prev.map((item) => (item.id === ws.id ? created : item)))
         setSelectedWorkspace(created)
@@ -708,8 +709,8 @@ function OpenProjectDialog(props: {
     setSubmitting(true)
     setError("")
     try {
-      // 创建工作区：body 自动携带 client_id
-      const ws = await createWorkspace({ path: value })
+      // 创建工作区：body 自动携带 client_id，并按项目路径回填 YOLO
+      const ws = await createWorkspace({ path: value, yolo: recalledYolo(value) })
       props.onCreated(ws)
     } catch (err) {
       setError(errorMessage(err))

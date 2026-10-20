@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import { useLocation, useNavigate } from "@solidjs/router"
 import { createSession, listSessions, type Session } from "../lib/sessions"
 import { createWorkspace } from "../lib/workspaces"
-import { rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import { recalledYolo, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
   closeSessionTab,
@@ -136,7 +136,7 @@ export default function Titlebar() {
     if (path && current?.path === path) return current.id
     if (path) {
       try {
-        const ws = await createWorkspace({ path })
+        const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
         rememberWorkspace(ws)
         setSelectedWorkspace(ws)
         retargetSessionTabs(path, ws.id)

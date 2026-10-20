@@ -9,6 +9,7 @@ import type { Workspace } from "../lib/workspaces"
 import { getSkip, setSkip } from "../lib/permissions"
 import { listSkills, type SkillInfo } from "../lib/diagnostics"
 import { setTheme, theme } from "../lib/ui-store"
+import { rememberYolo } from "../lib/workspace-store"
 import ModelSelect from "./model-select"
 
 export default function SettingsDialog(props: {
@@ -25,7 +26,10 @@ export default function SettingsDialog(props: {
     const wsId = props.ws?.id
     if (!wsId) return
     void getSkip(wsId)
-      .then(setYolo)
+      .then((skip) => {
+        setYolo(skip)
+        if (props.ws?.path) rememberYolo(props.ws.path, skip)
+      })
       .catch(() => setYolo(false))
     void listSkills(wsId)
       .then(setSkills)
@@ -44,6 +48,8 @@ export default function SettingsDialog(props: {
     setYoloPending(true)
     try {
       await setSkip(wsId, !prev)
+      // 同步写入按项目路径的缓存：workspace 被回收重建后可回填
+      if (props.ws?.path) rememberYolo(props.ws.path, !prev)
     } catch {
       setYolo(prev)
       props.onToast("Failed to update permissions")

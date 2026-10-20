@@ -42,14 +42,17 @@ export async function getWorkspace(id: string): Promise<Workspace> {
 
 /**
  * createWorkspace
- * 参数：input.path 项目的绝对路径
- * 核心流程：POST /workspaces，body 自动附带持久化 client_id，返回创建（或幂等命中）的 workspace
+ * 参数：input.path 项目的绝对路径；input.yolo 该项目的 YOLO 开关（可选，服务端据此初始化权限模式）
+ * 核心流程：POST /workspaces，body 自动附带持久化 client_id；
+ *           仅在本地有 YOLO 缓存时附带 yolo，避免覆盖服务端默认值
  */
-export async function createWorkspace(input: { path: string }): Promise<Workspace> {
-  return httpPost<Workspace>("/workspaces", {
+export async function createWorkspace(input: { path: string; yolo?: boolean }): Promise<Workspace> {
+  const body: Record<string, unknown> = {
     path: input.path,
     client_id: getClientId(),
-  })
+  }
+  if (typeof input.yolo === "boolean") body.yolo = input.yolo
+  return httpPost<Workspace>("/workspaces", body)
 }
 
 /**
