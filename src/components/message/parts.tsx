@@ -309,6 +309,16 @@ function defaultOpenTool(name: string): boolean {
 }
 
 /**
+ * needsToolInput
+ * 参数：name 工具名
+ * 核心流程：这些工具的卡片需要调用参数才能渲染内容（diff / 代码 / 命令），
+ *           结果卡也要从原始调用里回查 input；其余工具不需要
+ */
+function needsToolInput(name: string): boolean {
+  return /^(edit|multiedit|bash|view)$/i.test(name)
+}
+
+/**
  * AssistantParts
  * 参数：message 消息（assistant/system/tool）
  * 核心流程：计算"最后一个未完成的 tool_call"作为唯一自动展开项；
@@ -440,7 +450,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const tr = data as ToolResultPartData
               // todos 由 Todo Dock 统一展示；agent 结果由上方 SubagentCard 跨消息合并，避免重复卡片
               if ((tr.name || "") === "todos" || (tr.name || "") === "agent") return null
-              // 结果消息只带 tool_call_id：反查原始调用，edit 类卡片据此展示文件路径等参数
+              // 结果消息只带 tool_call_id：反查原始调用，edit/bash/view 卡片据此展示参数与内容
               const origin = tr.tool_call_id ? subagent?.toolCalls().get(tr.tool_call_id) : undefined
               const name = tr.name || origin?.name || "tool"
               // edit 结果已合并进调用卡片：跳过独立结果卡，避免同一操作出现两张卡片
@@ -450,7 +460,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               return (
                 <ToolCard
                   name={name}
-                  inputRaw={/^(edit|multiedit)$/i.test(name) ? origin?.input : undefined}
+                  inputRaw={needsToolInput(name) ? origin?.input : undefined}
                   finished={true}
                   result={tr}
                   open={resultOpen()}
@@ -582,11 +592,10 @@ function ToolCard(props: {
       ? parseViewData(props.inputRaw, props.result?.metadata, props.result?.content)
       : undefined,
   )
-  // bash 展开时改用命令/输出双块：命令按 bash 高亮，输出单独成块
+  // bash：命令常显，不依赖展开态；输出与元信息仍在展开区（方案 B）
+  const isBash = () => /^bash$/i.test(props.name)
   const bashData = createMemo(() =>
-    props.open && /^bash$/i.test(props.name)
-      ? parseBashData(props.inputRaw, props.result?.metadata, props.result?.content, hasError())
-      : undefined,
+    isBash() ? parseBashData(props.inputRaw, props.result?.metadata, props.result?.content, hasError()) : undefined,
   )
   const hasBody = () =>
     !!props.inputRaw || !!props.result?.content || !!editDiff() || !!viewData() || !!bashData()
@@ -621,11 +630,18 @@ function ToolCard(props: {
           <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
         </Show>
       </button>
-      <Show when={props.open && hasBody()}>
+      {/* bash：命令常显（不点也能看到完整命令），输出与元信息随展开显示 */}
+      <Show when={bashData()}>
+        {(data) => (
+          <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
+            <BashBody data={data()} expanded={props.open} />
+          </div>
+        )}
+      </Show>
+      <Show when={props.open && hasBody() && !bashData()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
           <Switch>
             <Match when={viewData()}>{(data) => <ViewCode data={data()} />}</Match>
-            <Match when={bashData()}>{(data) => <BashBody data={data()} />}</Match>
             <Match when={editDiff()}>{(diff) => <EditDiff data={diff()} />}</Match>
             <Match when={true}>
               <>

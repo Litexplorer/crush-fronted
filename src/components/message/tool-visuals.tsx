@@ -88,6 +88,9 @@ export function toolSummary(name: string, inputRaw: string | undefined): string 
   if (lower.includes("bash") || lower.includes("shell")) {
     const command = input.command
     if (typeof command === "string" && command) {
+      // 命令已在卡片内常显：头部优先展示 description 作为扼要，缺失时回退首行
+      const description = input.description
+      if (typeof description === "string" && description.trim()) return truncate(description.trim(), 80)
       const firstLine = command.split("\n")[0] ?? command
       return truncate(firstLine, 80)
     }

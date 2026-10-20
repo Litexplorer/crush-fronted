@@ -8,6 +8,7 @@
 import { Show } from "solid-js"
 import { parseToolInput } from "./tool-visuals"
 import CodeBlock, { languageOf } from "./code-block"
+import HtmlPreview from "./html-preview"
 
 export interface ViewData {
   filePath: string
@@ -113,6 +114,9 @@ function prettyPath(path: string): string {
 export default function ViewCode(props: { data: ViewData }) {
   const totalLines = () => props.data.code.split("\n").length
   const endLine = () => props.data.startLine + totalLines() - 1
+  // HTML 文件（或内容本身就是文档）额外提供沙箱预览
+  const isHtml = () =>
+    /\.(html?|xhtml)$/i.test(props.data.filePath) || /^\s*<!doctype html/i.test(props.data.code)
 
   return (
     <div class="overflow-hidden rounded-[8px] border border-edge">
@@ -137,15 +141,28 @@ export default function ViewCode(props: { data: ViewData }) {
         )}
       </Show>
 
-      <div class="border-0 [&>div]:rounded-none [&>div]:border-0">
-        <CodeBlock
-          code={props.data.code}
-          language={languageOf(props.data.filePath)}
+      <Show
+        when={isHtml()}
+        fallback={
+          <div class="border-0 [&>div]:rounded-none [&>div]:border-0">
+            <CodeBlock
+              code={props.data.code}
+              language={languageOf(props.data.filePath)}
+              startLine={props.data.startLine}
+              collapsedLines={DEFAULT_VISIBLE_LINES}
+              hint={props.data.moreHint}
+            />
+          </div>
+        }
+      >
+        {/* HTML 文件：源码 / 沙箱预览切换，预览不默认开启 */}
+        <HtmlPreview
+          html={props.data.code}
+          filePath={props.data.filePath}
           startLine={props.data.startLine}
-          collapsedLines={DEFAULT_VISIBLE_LINES}
           hint={props.data.moreHint}
         />
-      </div>
+      </Show>
 
       <Show when={props.data.diagnostics}>
         {(diagnostics) => (

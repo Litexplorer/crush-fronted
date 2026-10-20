@@ -19,7 +19,7 @@ export interface BashData {
   failed: boolean
 }
 
-const COMMAND_VISIBLE_LINES = 8
+const COMMAND_VISIBLE_LINES = 30
 const OUTPUT_VISIBLE_LINES = 10
 
 /** ANSI 颜色/光标控制序列：终端输出带色码时先剥离，前端不做终端模拟 */
@@ -94,10 +94,10 @@ export function parseBashData(
 
 /**
  * BashBody
- * 参数：data 解析后的 bash 数据
- * 核心流程：命令块（bash 高亮）→ 输出块（浅底、可折叠）→ 元信息行
+ * 参数：data 解析后的 bash 数据；expanded 是否展开（只控制输出与元信息）
+ * 核心流程：命令块常显（完整命令、不点开也能看到）→ 展开后补输出块（浅底、可折叠） *           与元信息行；失败状态在收起时也保留
  */
-export default function BashBody(props: { data: BashData }) {
+export default function BashBody(props: { data: BashData; expanded: boolean }) {
   const seconds = () => {
     const ms = props.data.durationMs
     if (!ms || ms <= 0) return ""
@@ -110,34 +110,39 @@ export default function BashBody(props: { data: BashData }) {
         code={props.data.command}
         language="bash"
         collapsedLines={COMMAND_VISIBLE_LINES}
-        maxHeight={280}
+        maxHeight={420}
         hint={props.data.description}
       />
-      <Show when={props.data.output.length > 0}>
-        <CodeBlock
-          code={props.data.output}
-          collapsedLines={OUTPUT_VISIBLE_LINES}
-          maxHeight={340}
-          tone="output"
-        />
+      <Show when={props.expanded}>
+        <Show when={props.data.output.length > 0}>
+          <CodeBlock
+            code={props.data.output}
+            collapsedLines={OUTPUT_VISIBLE_LINES}
+            maxHeight={340}
+            tone="output"
+          />
+        </Show>
       </Show>
+      {/* 失败状态无需展开即可看到，其余元信息随展开显示 */}
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">
         <Show when={props.data.failed}>
           <span class="text-[#e5484d]">failed</span>
         </Show>
-        <Show when={seconds()}>
-          <span>{seconds()}</span>
-        </Show>
-        <Show when={props.data.cwd}>
-          <span class="min-w-0 truncate font-mono" title={props.data.cwd}>
-            {props.data.cwd}
-          </span>
-        </Show>
-        <Show when={props.data.background}>
-          <span class="rounded-[4px] border border-edge px-1 py-0.5">background</span>
-        </Show>
-        <Show when={props.data.shellId}>
-          <span class="font-mono">shell {props.data.shellId}</span>
+        <Show when={props.expanded}>
+          <Show when={seconds()}>
+            <span>{seconds()}</span>
+          </Show>
+          <Show when={props.data.cwd}>
+            <span class="min-w-0 truncate font-mono" title={props.data.cwd}>
+              {props.data.cwd}
+            </span>
+          </Show>
+          <Show when={props.data.background}>
+            <span class="rounded-[4px] border border-edge px-1 py-0.5">background</span>
+          </Show>
+          <Show when={props.data.shellId}>
+            <span class="font-mono">shell {props.data.shellId}</span>
+          </Show>
         </Show>
       </div>
     </div>
