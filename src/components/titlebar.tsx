@@ -18,11 +18,10 @@ import {
   reorderSessionTabs,
   retargetSessionTabs,
   setActiveSession,
-  setTheme,
-  theme,
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
+import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
 
 type ConnectionState = "connected" | "disconnected"
@@ -895,31 +894,8 @@ export default function Titlebar() {
       </div>
 
       <div class="flex shrink-0 items-center gap-1">
-        {/* 主题切换：dark/light，持久化到 localStorage */}
-        <button
-          type="button"
-          aria-label={theme() === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme() === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          class="flex size-7 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
-          onClick={() => setTheme(theme() === "dark" ? "light" : "dark")}
-        >
-          <Show
-            when={theme() === "dark"}
-            fallback={
-              <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.4">
-                <circle cx="8" cy="8" r="2.6" />
-                <path
-                  d="M8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M12.4 3.6l-1 1M4.6 11.4l-1 1"
-                  stroke-linecap="round"
-                />
-              </svg>
-            }
-          >
-            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.4">
-              <path d="M13.2 9.6A5.4 5.4 0 1 1 6.4 2.8a4.4 4.4 0 0 0 6.8 6.8Z" stroke-linejoin="round" />
-            </svg>
-          </Show>
-        </button>
+        {/* 主题选择：下拉列出全部主题，选中即切换 */}
+        <ThemeSelect />
 
         {/* 状态圆点：点击打开 MCP/LSP/Skills 浮层 */}
         <div class="relative">

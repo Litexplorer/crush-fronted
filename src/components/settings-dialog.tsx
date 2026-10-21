@@ -8,7 +8,7 @@ import { createSignal, For, onMount, Show } from "solid-js"
 import type { Workspace } from "../lib/workspaces"
 import { getSkip, setSkip } from "../lib/permissions"
 import { listSkills, type SkillInfo } from "../lib/diagnostics"
-import { setTheme, theme } from "../lib/ui-store"
+import ThemeSelect from "./theme-select"
 import { rememberYolo } from "../lib/workspace-store"
 import ModelSelect from "./model-select"
 
@@ -82,22 +82,8 @@ export default function SettingsDialog(props: {
             <span class="text-[11px] font-medium uppercase tracking-wide text-faint">Appearance</span>
             <div class="flex items-center justify-between rounded-lg border border-edge px-3 py-2">
               <span class="text-[13px] text-text">Theme</span>
-              <div class="flex gap-1">
-                <For each={["dark", "light"] as const}>
-                  {(t) => (
-                    <button
-                      type="button"
-                      class="rounded-[6px] border px-2.5 py-1 text-[12px] transition-colors"
-                      classList={{
-                        "border-edge-strong bg-raised text-text": theme() === t,
-                        "border-edge text-muted hover:bg-raised": theme() !== t,
-                      }}
-                      onClick={() => setTheme(t)}
-                    >
-                      {t === "dark" ? "Dark" : "Light"}
-                    </button>
-                  )}
-                </For>
+              <div class="w-[240px] max-w-[60%]">
+                <ThemeSelect trigger="field" />
               </div>
             </div>
           </section>

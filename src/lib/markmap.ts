@@ -6,7 +6,7 @@
  *           renderMarkmap   在目标容器内建 svg，交给 Markmap 布局，返回销毁函数
  */
 import DOMPurify from "dompurify"
-import type { Theme } from "./ui-store"
+import { themeMode, type Theme } from "./themes"
 
 type MarkmapLib = typeof import("markmap-lib")
 type MarkmapView = typeof import("markmap-view")
@@ -72,7 +72,7 @@ export async function renderMarkmap(target: HTMLElement, source: string, theme: 
 
   // 关闭动画，避免消息流式结束后的首帧尺寸抖动影响虚拟列表测量
   const options = view.deriveOptions({
-    color: theme === "dark" ? DARK_PALETTE : LIGHT_PALETTE,
+    color: themeMode(theme) === "dark" ? DARK_PALETTE : LIGHT_PALETTE,
     maxWidth: 320,
     spacingHorizontal: 64,
     spacingVertical: 6,

@@ -79,7 +79,7 @@ src/
   index.css                    Tailwind 入口 + 主题变量 + Markdown 样式
   lib/                         接口层：http / workspaces / sessions / agent / events /
                                permissions / questions / models / files / review /
-                               diagnostics / ui-store / workspace-store / mermaid / usage /
+                               diagnostics / ui-store / themes / workspace-store / mermaid / usage /
                                subagents（子会话 ID、prompt/title/metadata 解析与懒加载）
                                agent.ts 附件字段：@ 文件传 file_path；粘贴图片传
                                file_name + mime_type + content（base64）
@@ -109,4 +109,42 @@ src/
 
 CSS 变量语义命名参考 opencode 的 `--v2-*`：`--bg-base`、`--bg-deep`、
 `--text-base`、`--text-muted`、`--border-base`、`--accent`。
-通过 `<html data-theme="light" | "dark">` 切换，默认 dark，选择持久化到 localStorage。
+通过 `<html data-theme="<id>">` 切换，选择持久化到 localStorage（键 `crush.theme`）。
+
+共 44 套主题 = 内置 4 套 + 从 Crush TUI 主题生成的 40 套（`~/.config/crush/themes`）。
+标题栏图标按钮与设置面板的 Theme 行都是下拉选择（自带搜索与色块预览）。
+
+| 来源 | 文件 | 说明 |
+|---|---|---|
+| 内置 | `src/lib/themes.ts` | `dark` / `light` / `midnight` / `daybreak` |
+| 生成 | `src/lib/theme-palettes.generated.ts` | 40 套，供注册表与下拉预览使用 |
+| 生成 | `src/themes.generated.css` | 40 套的 `html[data-theme="<id>"]` 变量块 |
+
+### TUI → Web 映射
+
+| Web 变量 | TUI 字段 |
+|---|---|
+| `--bg-deep` / `--bg-base` / `--bg-raised` | `bg_base` / `bg_less_visible` / `bg_most_visible` |
+| `--text-base` / `--text-muted` / `--text-faint` | `fg_base` / `fg_subtle` / `fg_more_subtle` |
+| `--border-base` / `--border-strong` | `separator` / `separator` 与 `fg_base` 混合 |
+| `--accent` | `primary` |
+| `--status-connected` / `--status-disconnected` | `success` / `fg_most_subtle` |
+
+生成器会按 `bg_base` 亮度判定明暗、在 `fg_more_subtle` 反而更亮时交换弱色层级，
+并把低于 3:1 的次要文字向正文色提亮。
+
+```bash
+bun run themes:gen     # 重新生成两份产物（默认读取 ~/.config/crush/themes）
+bun run themes:check   # 只做对比度巡检，不改文件
+```
+
+### 新增一个内置主题
+
+1. 在 `src/lib/themes.ts` 的 `BUILTIN_THEMES` 或 `THEMES` 里加一项（含 `preview`）；
+2. 在 `src/index.css` 加 `html[data-theme="<id>"] { ... }`，至少给出
+   `--bg-base/--bg-deep/--bg-raised`、`--text-base/--text-muted/--text-faint`、
+   `--border-base/--border-strong`、`--accent`、`--status-connected/--status-disconnected`；
+3. 若是 **light** 模式，把 `index.css` 里 `html[data-theme="light"]` 的代码高亮分支
+   （`--md-hl-*`）补上该 id；dark 模式复用 `:root` 里的默认值。
+
+mermaid 通过 CSS 变量取色，markmap 按 `themeMode()` 选择明暗调色板。

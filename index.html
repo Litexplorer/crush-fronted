@@ -10,6 +10,14 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <title>Crush</title>
+    <script>
+      // 首帧按已保存主题设置 data-theme：浅色/自定义主题刷新时不会先闪一下深色；
+      // 只接受小写字母数字与连字符，脏值交给 ui-store 的注册表校验回落默认主题
+      try {
+        var saved = localStorage.getItem("crush.theme")
+        if (saved && /^[a-z0-9-]+$/.test(saved)) document.documentElement.dataset.theme = saved
+      } catch (err) {}
+    </script>
   </head>
   <body class="antialiased overscroll-none overflow-hidden">
     <noscript>你需要启用 JavaScript 才能运行本应用。</noscript>

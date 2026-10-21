@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./themes.generated.css";
 
 /* @theme inline：把语义变量映射为 Tailwind 工具类（bg-base / text-muted 等） */
 @theme inline {
@@ -16,7 +17,7 @@
 /*
  * 主题 CSS 变量
  * 语义命名对齐 opencode --v2-* 风格：背景 / 文本 / 边框 / 强调色
- * 通过 html[data-theme="light" | "dark"] 切换，默认 dark
+ * 主题 id 注册在 lib/themes.ts，这里按 html[data-theme="<id>"] 提供配色，默认 dark
  */
 :root,
 html[data-theme="dark"] {
@@ -49,6 +50,40 @@ html[data-theme="light"] {
   --accent: #2c47c8;
   --status-connected: #198b43;
   --status-disconnected: #aeaeae;
+}
+
+/* Midnight：取色自 NexAgent 文档稿（深海军蓝 + 青绿强调） */
+html[data-theme="midnight"] {
+  color-scheme: dark;
+
+  --bg-base: #111a30;
+  --bg-deep: #080c18;
+  --bg-raised: #1b2742;
+  --text-base: #e8ecf7;
+  --text-muted: #8d99b5;
+  --text-faint: #5c6884;
+  --border-base: #243153;
+  --border-strong: #3a4e7d;
+  --accent: #4fe3c1;
+  --status-connected: #4fe3c1;
+  --status-disconnected: #5c6884;
+}
+
+/* Daybreak：Midnight 的同源浅色版（雾蓝底 + 深青绿强调） */
+html[data-theme="daybreak"] {
+  color-scheme: light;
+
+  --bg-base: #ffffff;
+  --bg-deep: #f4f7ff;
+  --bg-raised: #edf1fb;
+  --text-base: #0b1220;
+  --text-muted: #4b5878;
+  --text-faint: #7a86a3;
+  --border-base: #d7dff0;
+  --border-strong: #a8b8dc;
+  --accent: #0b7f6b;
+  --status-connected: #0b7f6b;
+  --status-disconnected: #7a86a3;
 }
 
 html,
@@ -731,7 +766,8 @@ svg.markmap-svg.markmap {
   --md-hl-error: #e5484d;
 }
 
-html[data-theme="light"] {
+html[data-theme="light"],
+html[data-theme="daybreak"] {
   --md-hl-comment: #8a919c;
   --md-hl-keyword: #8e44ad;
   --md-hl-string: #2e7d32;

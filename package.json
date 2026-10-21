@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "themes:gen": "node scripts/gen-web-themes.mjs",
+    "themes:check": "node scripts/gen-web-themes.mjs --check"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",

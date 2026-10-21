@@ -5,7 +5,7 @@
  *           renderMermaid  串行 parse/render，返回 SVG 与绑定函数
  *           主题配置读取 CSS 变量，暗色/亮色切换后重新初始化
  */
-import type { Theme } from "./ui-store"
+import type { Theme } from "./themes"
 import { randomUuid } from "./clientId"
 
 type MermaidApi = typeof import("mermaid").default

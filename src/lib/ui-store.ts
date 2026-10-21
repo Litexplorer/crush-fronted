@@ -2,36 +2,56 @@
  * ui-store.ts
  * 参数：无
  * 核心流程：全局 UI 状态 ——
- *           主题（dark/light，localStorage 持久化，写入 html[data-theme]）
+ *           主题（注册表见 lib/themes.ts，localStorage 持久化，写入 html[data-theme]）
  *           当前打开的会话（标题栏标签页展示用）
  */
 import { createSignal } from "solid-js"
+import { DEFAULT_THEME, isTheme, type Theme } from "./themes"
 
-export type Theme = "dark" | "light"
+export type { Theme } from "./themes"
 
 const THEME_KEY = "crush.theme"
 
 /**
  * readTheme
  * 参数：无
- * 核心流程：从 localStorage 读取主题，非 light 一律回落 dark
+ * 核心流程：从 localStorage 读取主题，命中注册表才采信，否则回落默认主题
  */
 function readTheme(): Theme {
   try {
-    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"
+    const stored = localStorage.getItem(THEME_KEY)
+    if (typeof stored === "string" && isTheme(stored)) return stored
+    // 主题被删除或手写错误时把脏值纠正回默认，避免 localStorage 长期残留无效 id
+    if (stored !== null) localStorage.setItem(THEME_KEY, DEFAULT_THEME)
+    return DEFAULT_THEME
   } catch {
-    return "dark"
+    return DEFAULT_THEME
   }
+}
+
+/**
+ * syncThemeColor
+ * 参数：无
+ * 核心流程：把地址栏 theme-color 同步为当前 --bg-deep；样式尚未注入时读到空值，
+ *           交给调用方下一帧重试，避免把地址栏留成默认深色
+ */
+function syncThemeColor() {
+  const bgDeep = getComputedStyle(document.documentElement).getPropertyValue("--bg-deep").trim()
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (bgDeep && meta) meta.setAttribute("content", bgDeep)
 }
 
 /**
  * applyTheme
  * 参数：theme 目标主题
- * 核心流程：写入 html[data-theme]，驱动 index.css 里的 CSS 变量切换
+ * 核心流程：写入 html[data-theme] 驱动 index.css 变量切换 → 同步 theme-color；
+ *           首帧样式可能还没生效，下一帧再同步一次兜底
  */
 function applyTheme(theme: Theme) {
   if (typeof document === "undefined") return
   document.documentElement.dataset.theme = theme
+  syncThemeColor()
+  requestAnimationFrame(syncThemeColor)
 }
 
 const [theme, setThemeSignal] = createSignal<Theme>(readTheme())
