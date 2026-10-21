@@ -25,6 +25,11 @@ type MentionRow = {
   attachOnly: boolean
 }
 
+/** @ 引用默认递归层数：一次拉平足够深的工作区树，搜索才能跨目录命中 */
+const MENTION_DEPTH = 4
+/** 浮层最多渲染的候选行数：避免上千条 DOM 节点拖慢输入 */
+const MAX_RENDERED_ROWS = 200
+
 export default function FileMention(props: {
   wsId: string
   onPick: (entry: FileEntry) => void
@@ -51,7 +56,8 @@ export default function FileMention(props: {
     setError("")
     setActive(0)
     try {
-      const data = await listWorkspaceFiles(props.wsId, path)
+      // 递归拉取当前目录：扁平结果让搜索能命中更深层的文件
+      const data = await listWorkspaceFiles(props.wsId, path, MENTION_DEPTH)
       // 只接受最后一次请求结果，避免快速下钻时旧响应覆盖新目录
       if (seq !== loadSeq) return
       setEntries(data)
@@ -88,15 +94,15 @@ export default function FileMention(props: {
     return [{ name: "workspace", path: "" }, ...parts.map((p, i) => ({ name: p, path: parts.slice(0, i + 1).join("/") }))]
   }
 
-  /** 过滤后条目：目录优先、名称不区分大小写 */
+  /** 过滤后条目：无查询时目录优先、路径升序；有查询时同时匹配名称与相对路径 */
   const visible = () => {
     const q = query().trim().toLowerCase()
     return [...entries()]
-      .filter((e) => !q || e.name.toLowerCase().includes(q))
-      .sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
+      .filter((e) => !q || e.name.toLowerCase().includes(q) || e.path.toLowerCase().includes(q))
+      .sort((a, b) => (a.is_dir === b.is_dir ? a.path.localeCompare(b.path) : a.is_dir ? -1 : 1))
   }
 
-  /** 键盘可选行：第 0 行固定为「附加当前目录」，其后是过滤后的条目 */
+  /** 键盘可选行：第 0 行固定为「附加当前目录」，其后是过滤后的条目（只渲染上限内） */
   const rows = (): MentionRow[] => {
     const current: FileEntry = {
       name: dir() ? (dir().split("/").pop() ?? "workspace") : "workspace",
@@ -104,7 +110,12 @@ export default function FileMention(props: {
       is_dir: true,
       size: 0,
     }
-    return [{ entry: current, attachOnly: true }, ...visible().map((entry) => ({ entry, attachOnly: false }))]
+    return [
+      { entry: current, attachOnly: true },
+      ...visible()
+        .slice(0, MAX_RENDERED_ROWS)
+        .map((entry) => ({ entry, attachOnly: false })),
+    ]
   }
 
   /** 上移一级目录；已在根目录时无操作 */
@@ -276,14 +287,16 @@ export default function FileMention(props: {
                         </svg>
                       </Show>
                       <span class="min-w-0 flex-1 truncate text-text">
-                        {row.attachOnly ? "Attach this folder" : row.entry.name}
+                        {row.attachOnly ? "Attach this folder" : row.entry.path}
                       </span>
                       <span class="max-w-[150px] shrink-0 truncate text-[11px] text-faint">
                         {row.attachOnly
                           ? dir() || "/"
                           : row.entry.is_dir
                             ? "→"
-                            : `${row.entry.size} B`}
+                            : row.entry.size > 0
+                              ? `${row.entry.size} B`
+                              : ""}
                       </span>
                     </button>
                     {/* 目录额外提供「作为附件」按钮：Enter/Esc 之外也可用鼠标直接附加 */}
@@ -307,6 +320,12 @@ export default function FileMention(props: {
               <Show when={visible().length === 0}>
                 <div class="px-2 py-3 text-center text-[12px] text-faint">No files in this folder</div>
               </Show>
+              {/* 递归结果超出渲染上限时提示缩小搜索，而不是静默截断 */}
+              <Show when={visible().length > MAX_RENDERED_ROWS}>
+                <div class="px-2 py-2 text-center text-[11px] text-faint">
+                  Showing first {MAX_RENDERED_ROWS} of {visible().length} matches — refine the search
+                </div>
+              </Show>
             </div>
           </Show>
         </Show>
@@ -317,6 +336,7 @@ export default function FileMention(props: {
         <span>Enter/Tab 添加</span>
         <span>→ 进入文件夹</span>
         <span>← 返回</span>
+        <span>搜索覆盖子目录</span>
       </div>
     </div>
   )

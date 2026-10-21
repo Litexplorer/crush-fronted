@@ -21,6 +21,7 @@ import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type 
 import RunningIndicator from "../components/message/running-indicator"
 import { SubagentProvider, type SubagentStore } from "../components/message/subagent-context"
 import FileMention from "../components/file-mention"
+import HashMention from "../components/hash-mention"
 import ModelSelect from "../components/model-select"
 import UsageMeter from "../components/usage-meter"
 import SessionInfoDialog from "../components/session-info-dialog"
@@ -37,6 +38,8 @@ import { createWorkspace, getWorkspace, type Workspace } from "../lib/workspaces
 import { workspaceColor } from "../lib/workspace-color"
 import { childSessionId, loadSubagent } from "../lib/subagents"
 import type { FileEntry } from "../lib/files"
+import { readSkill } from "../lib/skills"
+import type { MentionItem } from "../lib/mentions"
 import type { ApiError } from "../lib/http"
 
 type LoadState = "loading" | "ready" | "error"
@@ -72,6 +75,13 @@ interface ImageAttachment {
   mime: string
   base64: string
   previewUrl: string
+}
+
+/** # 引用到的技能：content 为后端返回的 base64 正文，发送时原样作附件内容 */
+interface SkillAttachment {
+  id: string
+  name: string
+  content: string
 }
 
 /**
@@ -227,6 +237,10 @@ export default function Session() {
   const [attachments, setAttachments] = createSignal<FileEntry[]>([])
   const [mentionOpen, setMentionOpen] = createSignal(false)
 
+  // # 引用：输入 # 打开技能/MCP 浮层；技能正文作为附件，MCP 只插入引导文本
+  const [hashOpen, setHashOpen] = createSignal(false)
+  const [skillAttachments, setSkillAttachments] = createSignal<SkillAttachment[]>([])
+
   // 图片附件：粘贴/拖拽进入，以 base64 内联发送（无需落盘）；previewUrl 仅本地预览
   const [images, setImages] = createSignal<ImageAttachment[]>([])
   let imageSeq = 0
@@ -296,6 +310,8 @@ export default function Session() {
   let historyIndex = -1
   // 进入历史前的草稿快照：回退到草稿态时原样恢复
   let historyDraft = ""
+  // # 触发位置（草稿中 # 的下标）：选中候选后据此把 # 替换成结果，-1 表示无待替换
+  let hashAnchor = -1
   // 贴近底部标记：用户上翻即停用自动滚动，重新滚到底部附近后恢复
   let stickToBottom = true
   // 容器内指针是否按下：按住拖动滚动条/选中文本时产生的滚动才算用户操作
@@ -1094,6 +1110,62 @@ export default function Session() {
   }
 
   /**
+   * replaceHashAnchor
+   * 参数：text 用于替换 # 的文本
+   * 核心流程：按触发位置把草稿里的 # 换成 text → 下一帧聚焦输入框并把光标落到插入文本之后；
+   *           无待替换锚点（浮层非 # 触发）时只聚焦，不改草稿
+   */
+  function replaceHashAnchor(text: string) {
+    const at = hashAnchor
+    hashAnchor = -1
+    if (at < 0) {
+      queueMicrotask(() => draftRef?.focus())
+      return
+    }
+    const prev = draft()
+    const index = Math.min(at, prev.length)
+    const before = prev.slice(0, index)
+    setDraft(before + text + prev.slice(index + 1))
+    // 等一帧：draft effect 先跑高度自适应，再定位光标避免落在旧布局上
+    requestAnimationFrame(() => {
+      const el = draftRef
+      if (!el) return
+      el.focus()
+      const caret = before.length + text.length
+      el.setSelectionRange(caret, caret)
+      el.scrollTop = el.scrollHeight
+    })
+  }
+
+  /**
+   * handleMentionPick
+   * 参数：item 浮层选中的候选（技能或 MCP server）
+   * 核心流程：MCP 插入「使用该 server 工具」的引导文本 → 技能先用 skills/read 读取正文，
+   *           成功后挂到附件区并替换成 #name；读取失败保留 # 并在 Composer 上方提示
+   */
+  async function handleMentionPick(item: MentionItem) {
+    setHashOpen(false)
+    if (item.kind === "mcp") {
+      replaceHashAnchor(`#${item.name} (use the "${item.name}" MCP server tools) `)
+      return
+    }
+    const wsId = params.workspaceId
+    if (!wsId) return
+    try {
+      // 读取技能正文：content 为后端 JSON 中的 base64，可直接作为附件内容
+      const { content, result } = await readSkill(wsId, item.id)
+      const name = result.name || item.name
+      setSkillAttachments((prev) =>
+        prev.some((skill) => skill.id === item.id) ? prev : [...prev, { id: item.id, name, content }],
+      )
+      replaceHashAnchor(`#${name} `)
+    } catch (err) {
+      showComposerToast(errorMessage(err))
+      replaceHashAnchor("#")
+    }
+  }
+
+  /**
    * handleSend
    * 参数：无（读取 draft 输入）
    * 核心流程：校验就绪 → 乐观插入本地用户消息（临时 id）→ POST /agent 202 受理；
@@ -1132,6 +1204,7 @@ export default function Session() {
     setDraft("")
     setSendError("")
     setMentionOpen(false)
+    setHashOpen(false)
     resetHistoryCursor()
     setBusy(true)
     setSending(true)
@@ -1173,6 +1246,12 @@ export default function Session() {
             file_path: f.path,
             file_name: f.is_dir ? `${f.name}/` : f.name,
           })),
+          // # 引用的技能：正文直接内联（技能文件常在 workspace 之外，后端无法按路径读取）
+          ...skillAttachments().map((skill) => ({
+            file_name: `${skill.name}.md`,
+            mime_type: "text/markdown",
+            content: skill.content,
+          })),
           ...pendingImages.map((img) => ({
             file_name: img.name,
             mime_type: img.mime,
@@ -1181,6 +1260,7 @@ export default function Session() {
         ],
       })
       setAttachments([])
+      setSkillAttachments([])
       setImages([])
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
@@ -1223,8 +1303,8 @@ export default function Session() {
     }
     if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return
-    // @ 文件浮层自己用 ↑↓ 选文件：浮层打开时让给它
-    if (mentionOpen()) return
+    // @ 文件浮层与 # 技能/MCP 浮层自己用 ↑↓ 选择：浮层打开时让给它
+    if (mentionOpen() || hashOpen()) return
     const entries = historyEntries()
     if (entries.length === 0) return
     const el = e.currentTarget as HTMLTextAreaElement
@@ -1931,6 +2011,17 @@ export default function Session() {
                   onDragOver={handleComposerDragOver}
                   onDrop={handleComposerDrop}
                 >
+                  {/* # 引用浮层：选中技能附加正文、选中 MCP 插入引导文本 */}
+                  <Show when={hashOpen()}>
+                    <HashMention
+                      wsId={params.workspaceId}
+                      onPick={(item) => void handleMentionPick(item)}
+                      onClose={() => {
+                        setHashOpen(false)
+                        queueMicrotask(() => draftRef?.focus())
+                      }}
+                    />
+                  </Show>
                   {/* @ 文件引用浮层：选择文件后作为附件随 prompt 发送 */}
                   <Show when={mentionOpen()}>
                     <FileMention
@@ -1947,6 +2038,31 @@ export default function Session() {
                         queueMicrotask(() => draftRef?.focus())
                       }}
                     />
+                  </Show>
+                  {/* 技能 chips：# 引用到的技能正文会随 prompt 发送，可单个移除 */}
+                  <Show when={skillAttachments().length > 0}>
+                    <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                      <For each={skillAttachments()}>
+                        {(skill) => (
+                          <span class="flex max-w-[220px] items-center gap-1 rounded-md border border-edge bg-raised px-1.5 py-0.5 text-[11px] text-muted">
+                            <svg viewBox="0 0 16 16" class="size-3 shrink-0 text-accent" fill="none" stroke="currentColor" stroke-width="1.4">
+                              <path d="M3.5 3.5h9v9h-9z" stroke-linejoin="round" />
+                              <path d="M6 6.5h4M6 9h4" stroke-linecap="round" />
+                            </svg>
+                            <span class="truncate">{skill.name}</span>
+                            <span class="shrink-0 rounded-[3px] bg-edge px-1 text-[10px] text-faint">skill</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${skill.name}`}
+                              class="shrink-0 rounded-[3px] px-0.5 text-faint hover:bg-edge hover:text-text"
+                              onClick={() => setSkillAttachments((prev) => prev.filter((x) => x.id !== skill.id))}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        )}
+                      </For>
+                    </div>
                   </Show>
                   {/* 附件 chips：展示已选文件，可单个移除 */}
                   <Show when={attachments().length > 0}>
@@ -2010,10 +2126,18 @@ export default function Session() {
                     ref={draftRef}
                     value={draft()}
                     onInput={(e) => {
-                      const value = e.currentTarget.value
+                      const el = e.currentTarget
+                      const value = el.value
                       setDraft(value)
                       // 输入 @ 结尾：打开文件选择浮层
                       if (value.endsWith("@")) setMentionOpen(true)
+                      // 输入 #：仅行首或空白之后触发技能/MCP 浮层，避免 markdown 标题误触
+                      const caret = el.selectionStart ?? value.length
+                      if (value[caret - 1] === "#" && (caret < 2 || /\s/.test(value[caret - 2]))) {
+                        hashAnchor = caret - 1
+                        setMentionOpen(false)
+                        setHashOpen(true)
+                      }
                     }}
                     onKeyDown={handleInputKeyDown}
                     disabled={agentState() !== "ready"}
