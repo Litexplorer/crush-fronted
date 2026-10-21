@@ -198,6 +198,8 @@ export default function VirtualTimeline(props: VirtualTimelineProps) {
     if (!el) return
     requestAnimationFrame(() => {
       if (!el.isConnected) return
+      // 等帧期间用户可能已上翻：放弃本次跟随，避免把用户拽回底部
+      if (!props.stick?.()) return
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       if (distance <= BOTTOM_EPSILON) return
       // 告知父级：本次滚动是跟随行为，滚动监听不要据此判定“用户上翻了”

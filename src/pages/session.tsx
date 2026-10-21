@@ -10,7 +10,7 @@
  *           头部：会话标题 + 工作区名/路径（色点与标题栏标签一致）
  *           双栏：左侧会话内容，右侧 SessionPanel（Files 树，可折叠/拖宽，状态存 localStorage）
  */
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { getSession, listMessages, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
 import { cancel, getAgent, initAgent, newRunId, sendMessage, setCurrentSession } from "../lib/agent"
@@ -23,6 +23,8 @@ import { SubagentProvider, type SubagentStore } from "../components/message/suba
 import FileMention from "../components/file-mention"
 import ModelSelect from "../components/model-select"
 import UsageMeter from "../components/usage-meter"
+import SessionInfoDialog from "../components/session-info-dialog"
+import type { SelectedModel } from "../lib/models"
 import PermissionDock from "../components/permission-dock"
 import QuestionDock from "../components/question-dock"
 import SessionPanel from "../components/session-panel"
@@ -265,6 +267,10 @@ export default function Session() {
 
   // Composer 用量指示器：当前模型的 context_window，由 ModelSelect 加载/切换时上报
   const [modelContextWindow, setModelContextWindow] = createSignal<number>()
+  // 当前模型选择快照（含思考强度）：会话信息弹窗展示用
+  const [modelSelection, setModelSelection] = createSignal<SelectedModel>()
+  // 会话信息弹窗开关（Ctrl+Alt+I 或头部 ⓘ 按钮）
+  const [infoOpen, setInfoOpen] = createSignal(false)
   // 当前模型是否支持图片：undefined = 能力未知（不拦截），false = 明确不支持（发送前提示）
   const [modelSupportsImages, setModelSupportsImages] = createSignal<boolean>()
 
@@ -292,8 +298,10 @@ export default function Session() {
   let historyDraft = ""
   // 贴近底部标记：用户上翻即停用自动滚动，重新滚到底部附近后恢复
   let stickToBottom = true
-  // 跟随滚动的时间窗：虚拟列表程序化滚底后，滚动监听不再据此判定用户上翻
-  let autoScrollUntil = 0
+  // 容器内指针是否按下：按住拖动滚动条/选中文本时产生的滚动才算用户操作
+  let pointerHeld = false
+  // 触摸手势起点纵坐标：手指下移（内容上翻）才关闭跟随
+  let touchStartY = 0
   let pendingSeq = 0
   // current-session 上报序号：仅最后一次请求生效，避免过期重试覆盖新会话登记
   let reportSeq = 0
@@ -1127,6 +1135,8 @@ export default function Session() {
     resetHistoryCursor()
     setBusy(true)
     setSending(true)
+    // 新一轮对话必然跟随输出：即便之前因为上翻停用了自动滚动
+    stickToBottom = true
 
     // 乐观更新：立即插入临时用户消息，SSE 真实消息到来后按文本匹配替换
     const now = Math.floor(Date.now() / 1000)
@@ -1267,16 +1277,96 @@ export default function Session() {
   /**
    * handleScroll
    * 参数：无（读取滚动容器）
-   * 核心流程：距底部 40px 内视为贴近底部，恢复自动滚动；否则停用
+   * 核心流程：位置变化即刷新右侧 Q&A 选中项；只有按住指针拖动滚动条才用它判定
+   *           跟随开关（拖到顶部附近停用、拖回底部恢复）——
+   *           其余滚动事件可能来自跟随写入或浏览器滚动锚定，一律不改跟随状态
    */
   function handleScroll() {
     const el = scrollRef
     if (!el) return
     // 位置变化即刷新右侧 Q&A 选中项，程序化的贴底滚动同样需要
     scheduleQuestionSync()
-    // 跟随滚动的程序化滚动：不参与“用户是否上翻”的判定
-    if (performance.now() < autoScrollUntil) return
+    if (!pointerHeld) return
     stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
+
+  /**
+   * onWheelIntent
+   * 参数：e 滚轮事件
+   * 核心流程：向上滚动（deltaY < 0）直接停用跟随；向下滚且已经到底时恢复跟随 ——
+   *           依赖用户意图而不是几何距离，避免刷屏时追不上被误判成用户上翻
+   */
+  function onWheelIntent(e: WheelEvent) {
+    const el = scrollRef
+    if (!el) return
+    if (e.deltaY < 0) {
+      stickToBottom = false
+      return
+    }
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) stickToBottom = true
+  }
+
+  /**
+   * onKeyIntent
+   * 参数：e 键盘事件
+   * 核心流程：容器内按键滚动时按方向更新跟随 ——
+   *           ↑/PageUp/Home 视为用户上翻，停用跟随；↓/PageDown/End 且已到底时恢复；
+   *           焦点落在输入控件上时不处理，避免和控件自身的按键语义冲突
+   */
+  function onKeyIntent(e: KeyboardEvent) {
+    const el = scrollRef
+    if (!el) return
+    const target = e.target as HTMLElement | null
+    if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return
+    switch (e.key) {
+      case "ArrowUp":
+      case "PageUp":
+      case "Home":
+        stickToBottom = false
+        return
+      case "ArrowDown":
+      case "PageDown":
+      case "End":
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) stickToBottom = true
+        return
+    }
+  }
+
+  /**
+   * onPointerDownIntent
+   * 参数：e 指针按下事件
+   * 核心流程：标记指针处于按下状态，供滚动监听区分拖动滚动条与程序化滚动
+   */
+  function onPointerDownIntent() {
+    pointerHeld = true
+  }
+
+  /**
+   * onPointerUpIntent
+   * 参数：无
+   * 核心流程：指针抬起/取消即清除按下标记
+   */
+  function onPointerUpIntent() {
+    pointerHeld = false
+  }
+
+  /**
+   * onTouchStartIntent
+   * 参数：e 触摸事件
+   * 核心流程：记录手势起点纵坐标，供 touchmove 判断方向
+   */
+  function onTouchStartIntent(e: TouchEvent) {
+    touchStartY = e.touches[0]?.clientY ?? 0
+  }
+
+  /**
+   * onTouchMoveIntent
+   * 参数：e 触摸事件
+   * 核心流程：手指下移超过 6px 视为内容上翻，停用跟随
+   */
+  function onTouchMoveIntent(e: TouchEvent) {
+    const y = e.touches[0]?.clientY ?? touchStartY
+    if (y - touchStartY > 6) stickToBottom = false
   }
 
   /**
@@ -1393,6 +1483,18 @@ export default function Session() {
   const workspaceName = () => basename(workspacePath()) || params.workspaceId
   // 工作区配色：与标题栏标签色条保持一致，便于跨会话识别
   const workspaceTint = () => workspaceColor(workspacePath() || params.workspaceId)
+
+  // 最近一次实际使用的模型：ModelSelect 尚未上报时的兜底展示
+  const lastUsedModel = createMemo(() => {
+    const list = messages()
+    for (let index = list.length - 1; index >= 0; index--) {
+      const message = list[index]
+      if (message.role !== "assistant") continue
+      if (!message.model && !message.provider) continue
+      return { model: message.model, provider: message.provider }
+    }
+    return undefined
+  })
 
   // 运行指示：busy 且最后一条不是"正在流式的 assistant"时显示在时间线底部；
   // assistant 已开始流式后由消息自身的底部指示器接管，避免出现两条
@@ -1549,6 +1651,18 @@ export default function Session() {
     }
   }
 
+  // 会话信息弹窗快捷键：Ctrl+Alt+I 开关（纯展示操作，输入框内同样生效）
+  onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== "i") return
+      event.preventDefault()
+      setInfoOpen((open) => !open)
+    }
+    document.addEventListener("keydown", onKey)
+    onCleanup(() => document.removeEventListener("keydown", onKey))
+  })
+
   return (
     <div class="m-2 flex min-h-0 min-w-0 flex-1 flex-row gap-2 overflow-hidden">
       {/* 左栏：会话内容（header + 消息区 + 输入区），保持原单栏结构 */}
@@ -1592,6 +1706,20 @@ export default function Session() {
                 eventsConnection() === "connected" ? "var(--status-connected)" : "var(--status-disconnected)",
             }}
           />
+          {/* 会话信息：模型 / 用量 / MCP / LSP / Skills 汇总（Ctrl+Alt+I） */}
+          <button
+            type="button"
+            aria-label="Session info"
+            title="Session info (Ctrl+Alt+I)"
+            class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
+            onClick={() => setInfoOpen(true)}
+          >
+            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="8" cy="8" r="6" />
+              <path d="M8 7.4v3.8" stroke-linecap="round" />
+              <circle cx="8" cy="5" r="0.85" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
           {/* 刷新会话：重拉会话详情与消息；刷新期间图标旋转并禁用按钮 */}
           <button
             type="button"
@@ -1651,7 +1779,18 @@ export default function Session() {
         }>
           <div class="flex min-h-0 flex-1 flex-col">
             {/* 消息时间线：可滚动区，内容最大宽 1000px 居中（对齐 opencode 2xl） */}
-            <div ref={scrollRef} class="min-h-0 flex-1 overflow-y-auto" onScroll={handleScroll}>
+            <div
+              ref={scrollRef}
+              class="min-h-0 flex-1 overflow-y-auto"
+              onScroll={handleScroll}
+              onWheel={onWheelIntent}
+              onKeyDown={onKeyIntent}
+              onPointerDown={onPointerDownIntent}
+              onPointerUp={onPointerUpIntent}
+              onPointerCancel={onPointerUpIntent}
+              onTouchStart={onTouchStartIntent}
+              onTouchMove={onTouchMoveIntent}
+            >
               <div class="mx-auto flex w-full max-w-[1000px] flex-col px-4 py-5">
                 <Show when={messages().length > 0} fallback={
                   <div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>
@@ -1664,7 +1803,6 @@ export default function Session() {
                       pin={pinnedMessageId()}
                       stick={() => stickToBottom}
                       onAutoScroll={() => {
-                        autoScrollUntil = performance.now() + 150
                         // 贴底自动滚动后行位置会变化，重新对齐一次 Q&A 选中项
                         scheduleQuestionSync()
                       }}
@@ -1683,12 +1821,12 @@ export default function Session() {
                         </div>
                       )}
                     />
-                    {/* 等待首个 assistant 消息时：在时间线底部展示运行中字符带 */}
-                    <Show when={showTurnIndicator()}>
-                      <div class="px-1 py-2">
+                    {/* 运行中字符带：占位高度恒定，出现/消失不改变滚动高度，避免跟随漏触发 */}
+                    <div class="h-8 px-1 py-2" classList={{ invisible: !showTurnIndicator() }}>
+                      <Show when={showTurnIndicator()}>
                         <RunningIndicator />
-                      </div>
-                    </Show>
+                      </Show>
+                    </div>
                   </SubagentProvider>
                 </Show>
               </div>
@@ -1913,7 +2051,8 @@ export default function Session() {
                       <ModelSelect
                         wsId={params.workspaceId}
                         onToast={showComposerToast}
-                        onModelChange={(_model, contextWindow, supportsImages) => {
+                        onModelChange={(model, contextWindow, supportsImages) => {
+                          setModelSelection(model)
                           setModelContextWindow(contextWindow)
                           setModelSupportsImages(supportsImages)
                         }}
@@ -2002,6 +2141,18 @@ export default function Session() {
             onPointerCancel={onPanelResizeEnd}
           />
         </div>
+      </Show>
+
+      {/* 会话信息弹窗：固定遮罩层，打开时焦点进入弹窗 */}
+      <Show when={infoOpen()}>
+        <SessionInfoDialog
+          wsId={params.workspaceId}
+          session={session()}
+          model={modelSelection()}
+          lastUsed={lastUsedModel()}
+          contextWindow={modelContextWindow()}
+          onClose={() => setInfoOpen(false)}
+        />
       </Show>
     </div>
   )

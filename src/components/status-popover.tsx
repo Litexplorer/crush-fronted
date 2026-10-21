@@ -5,20 +5,14 @@
  *           并行加载 MCP / LSP / Skills → 分区展示状态与数量；
  *           支持刷新；点击浮层外部或 Escape 关闭
  */
-import { createEffect, createSignal, For, onMount, Show } from "solid-js"
+import { createEffect, createSignal, onMount, Show } from "solid-js"
 import { listLsps, listMcp, listSkills, type LspState, type McpState, type SkillInfo } from "../lib/diagnostics"
 import type { ApiError } from "../lib/http"
+import InfoSections from "./info-sections"
 
 function errorMessage(err: unknown): string {
   const e = err as ApiError
   return e?.message ?? "Unknown error"
-}
-
-/** 状态点颜色：connected/run 绿，disabled 灰，其他黄 */
-function dotClass(state: string | number): string {
-  if (state === "connected" || (typeof state === "number" && state > 0)) return "bg-[var(--status-connected)]"
-  if (state === "disabled") return "bg-[var(--status-disconnected)]"
-  return "bg-[#f5a623]"
 }
 
 export default function StatusPopover(props: { wsId?: string; connected: boolean; onClose: () => void }) {
@@ -68,9 +62,6 @@ export default function StatusPopover(props: { wsId?: string; connected: boolean
     }
   })
 
-  const activeMcp = () => mcp().filter((m) => m.state === "connected")
-  const activeLsp = () => lsps().filter((l) => l.state > 0)
-
   return (
     <div
       ref={rootRef}
@@ -101,67 +92,18 @@ export default function StatusPopover(props: { wsId?: string; connected: boolean
           </div>
         </div>
 
-        <Show when={error()}>
-          <div class="mb-2 rounded-md border border-[#e5484d]/40 bg-[#e5484d]/10 px-2 py-1.5 text-[11px] text-[#e5484d]">
-            {error()}
-          </div>
-        </Show>
-
-        <Show when={props.wsId} fallback={<div class="px-1 py-2 text-[11px] text-faint">Select a project for details</div>}>
-          <section class="mb-2">
-            <div class="flex items-center justify-between px-1 py-1">
-              <span class="text-[11px] font-medium text-muted">MCP</span>
-              <span class="text-[11px] text-faint">
-                {loading() ? "…" : `${activeMcp().length}/${mcp().length}`}
-              </span>
-            </div>
-            <For each={mcp()}>
-              {(m) => (
-                <div class="flex items-center gap-2 rounded-[5px] px-1 py-1">
-                  <span class={`size-1.5 shrink-0 rounded-full ${dotClass(m.state)}`} />
-                  <span class="min-w-0 flex-1 truncate text-[12px] text-text">{m.name}</span>
-                  <span class="shrink-0 text-[11px] text-faint">{m.state}</span>
-                </div>
-              )}
-            </For>
-            <Show when={!loading() && mcp().length === 0}>
-              <div class="px-1 py-1 text-[11px] text-faint">No MCP servers</div>
-            </Show>
-          </section>
-
-          <section class="mb-2">
-            <div class="flex items-center justify-between px-1 py-1">
-              <span class="text-[11px] font-medium text-muted">LSP</span>
-              <span class="text-[11px] text-faint">
-                {loading() ? "…" : `${activeLsp().length}/${lsps().length}`}
-              </span>
-            </div>
-            <For each={lsps().filter((l) => l.state > 0).slice(0, 8)}>
-              {(l) => (
-                <div class="flex items-center gap-2 rounded-[5px] px-1 py-1">
-                  <span class={`size-1.5 shrink-0 rounded-full ${dotClass(l.state)}`} />
-                  <span class="min-w-0 flex-1 truncate text-[12px] text-text">{l.name}</span>
-                </div>
-              )}
-            </For>
-            <Show when={!loading() && activeLsp().length === 0}>
-              <div class="px-1 py-1 text-[11px] text-faint">No running language servers</div>
-            </Show>
-          </section>
-
-          <section>
-            <div class="flex items-center justify-between px-1 py-1">
-              <span class="text-[11px] font-medium text-muted">Skills</span>
-              <span class="text-[11px] text-faint">{loading() ? "…" : String(skills().length)}</span>
-            </div>
-            <For each={skills().slice(0, 6)}>
-              {(s) => (
-                <div class="truncate rounded-[5px] px-1 py-1 text-[12px] text-text" title={s.description}>
-                  {s.name}
-                </div>
-              )}
-            </For>
-          </section>
+        <Show
+          when={props.wsId}
+          fallback={<div class="px-1 py-2 text-[11px] text-faint">Select a project for details</div>}
+        >
+          <InfoSections
+            variant="compact"
+            loading={loading()}
+            error={error()}
+            mcp={mcp()}
+            lsps={lsps()}
+            skills={skills()}
+          />
         </Show>
       </div>
     </div>
