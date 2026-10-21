@@ -113,6 +113,14 @@ export default function Titlebar() {
     return [...groups.values()]
   })
 
+  /**
+   * visibleTabs
+   * 参数：无
+   * 核心流程：把分组展平成语义上的可见顺序（组顺序 + 组内顺序）——
+   *           切换/键盘导航/关闭邻居全部以它为准，保证与标题栏渲染一致
+   */
+  const visibleTabs = createMemo<ActiveSession[]>(() => tabGroups().flatMap((group) => group.tabs))
+
   // 状态浮层数据源：当前会话所属工作区，回退到首页选中项
   const statusWsId = () => currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
 
@@ -331,7 +339,8 @@ export default function Titlebar() {
    */
   async function switchTab(delta: 1 | -1) {
     if (switching()) return
-    const tabs = openSessions()
+    // 取分组后的可见顺序：直接读 openSessions() 会跨项目乱跳
+    const tabs = visibleTabs()
     if (tabs.length < 2) return
     const index = tabs.findIndex((tab) => tab.id === currentSessionId())
     const next = index === -1 ? (delta > 0 ? 0 : tabs.length - 1) : (index + delta + tabs.length) % tabs.length
@@ -384,9 +393,16 @@ export default function Titlebar() {
    */
   function closeTab(tab: ActiveSession) {
     const closingActiveRoute = currentSessionId() === tab.id
-    const next = closeSessionTab(tab.id)
-    if (!closingActiveRoute) return
-    if (next) navigate(sessionUrl(next))
+    if (!closingActiveRoute) {
+      closeSessionTab(tab.id)
+      return
+    }
+    // 先按可见顺序选邻居：分组渲染后，数组里的相邻项未必是屏幕上的相邻项
+    const order = visibleTabs()
+    const index = order.findIndex((item) => item.id === tab.id)
+    const neighbour = index === -1 ? undefined : (order[index + 1] ?? order[index - 1])
+    closeSessionTab(tab.id)
+    if (neighbour) navigate(sessionUrl(neighbour))
     else navigate(`/w/${encodeURIComponent(tab.workspaceId)}`)
   }
 
@@ -416,7 +432,8 @@ export default function Titlebar() {
    *           Delete 关闭当前标签并把焦点交给相邻标签
    */
   function onTabKeyDown(event: KeyboardEvent, tabId: string) {
-    const tabs = openSessions()
+    // 与渲染一致：在分组后的可见顺序上取相邻标签
+    const tabs = visibleTabs()
     const index = tabs.findIndex((tab) => tab.id === tabId)
     const current = tabs[index]
     if (!current) return
@@ -453,7 +470,7 @@ export default function Titlebar() {
 
   /** 漫游 tabindex：每组只有一个标签进入 Tab 序列（优先当前会话所在标签） */
   const rovingTabId = () => {
-    const list = openSessions()
+    const list = visibleTabs()
     if (list.some((tab) => tab.id === currentSessionId())) return currentSessionId()
     return list[0]?.id ?? ""
   }
