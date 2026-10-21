@@ -227,7 +227,7 @@ export default function Titlebar() {
   })
 
   onMount(() => {
-    // 全局快捷键：Alt+←/→ 按标签展示顺序切换会话（挂在 document 上，任意焦点位置可用）
+    // 全局快捷键：Ctrl+←/→ 按标签展示顺序切换会话（挂在 document 上，任意焦点位置可用）
     document.addEventListener("keydown", handleTabShortcut)
     onCleanup(() => document.removeEventListener("keydown", handleTabShortcut))
   })
@@ -296,7 +296,7 @@ export default function Titlebar() {
    * isEditableTarget
    * 参数：target 键盘事件目标
    * 核心流程：判断焦点是否落在可编辑元素上（输入框/文本域/下拉/contenteditable），
-   *           这些元素里 Alt+方向键另有含义（按词移动光标），快捷键必须让位
+   *           这些元素里 Ctrl+方向键另有含义（按词移动光标），快捷键必须让位
    */
   function isEditableTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null
@@ -307,11 +307,11 @@ export default function Titlebar() {
   /**
    * handleTabShortcut
    * 参数：event 全局键盘事件
-   * 核心流程：Alt+←/→ 切换标签；带其它修饰键、输入法组词、可编辑焦点、
+   * 核心流程：Ctrl+←/→ 切换标签；带其它修饰键、输入法组词、可编辑焦点、
    *           或有浮层（会话选择器/标签菜单）打开时不处理
    */
   function handleTabShortcut(event: KeyboardEvent) {
-    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     if (event.isComposing) return
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
     if (isEditableTarget(event.target) || pickerOpen() || tabsMenu()) return
@@ -331,6 +331,72 @@ export default function Titlebar() {
     if (!closingActiveRoute) return
     if (next) navigate(sessionUrl(next))
     else navigate(`/w/${encodeURIComponent(tab.workspaceId)}`)
+  }
+
+  /**
+   * focusTabButton
+   * 参数：id 标签对应的会话 ID
+   * 核心流程：连续几帧把焦点交回该标签按钮 —— 切换会话会重排标签行，
+   *           元素被重建后焦点会丢失，重复几帧保证最终落在按钮上
+   */
+  function focusTabButton(id: string) {
+    const attempt = (left: number) => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLButtonElement>(
+          `[data-session-tab="${CSS.escape(id)}"] [role="tab"]`,
+        )
+        if (el && document.activeElement !== el) el.focus()
+        if (left > 0) attempt(left - 1)
+      })
+    }
+    attempt(2)
+  }
+
+  /**
+   * onTabKeyDown
+   * 参数：event 键盘事件；index 标签在当前列表中的下标
+   * 核心流程：←/→ 按展示顺序移动焦点并切换会话（首尾循环），Home/End 跳首尾，
+   *           Delete 关闭当前标签并把焦点交给相邻标签
+   */
+  function onTabKeyDown(event: KeyboardEvent, index: number) {
+    const tabs = openSessions()
+    const current = tabs[index]
+    if (!current) return
+    const go = (target: number) => {
+      const next = tabs[target]
+      if (!next || next.id === current.id) return
+      event.preventDefault()
+      // 等切换真正落地（含 workspace 解析）再交回焦点，否则标签行重建会吃掉焦点
+      void openTab(next).then(() => focusTabButton(next.id))
+    }
+    switch (event.key) {
+      case "ArrowLeft":
+        go((index - 1 + tabs.length) % tabs.length)
+        return
+      case "ArrowRight":
+        go((index + 1) % tabs.length)
+        return
+      case "Home":
+        go(0)
+        return
+      case "End":
+        go(tabs.length - 1)
+        return
+      case "Delete": {
+        event.preventDefault()
+        // 关闭后焦点顺着相邻标签走，避免键盘操作断档
+        const neighbour = tabs[index + 1] ?? tabs[index - 1]
+        closeTab(current)
+        if (neighbour) focusTabButton(neighbour.id)
+        return
+      }
+    }
+  }
+
+  /** 漫游 tabindex：列表里只有一个 tab 进入 Tab 序列（优先当前会话所在标签） */
+  const rovingIndex = () => {
+    const index = openSessions().findIndex((tab) => tab.id === currentSessionId())
+    return index >= 0 ? index : 0
   }
 
   /**
@@ -430,10 +496,12 @@ export default function Titlebar() {
         <div
           ref={stripRef}
           onScroll={updateScrollState}
+          role="tablist"
+          aria-label="Open sessions"
           class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <For each={openSessions()}>
-            {(tab) => (
+            {(tab, index) => (
               <div
                 data-session-tab={tab.id}
                 draggable={true}
@@ -468,11 +536,15 @@ export default function Titlebar() {
                 />
                 <button
                   type="button"
-                  class="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-left"
+                  role="tab"
+                  aria-selected={currentSessionId() === tab.id}
+                  tabIndex={rovingIndex() === index() ? 0 : -1}
+                  class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-[6px] pl-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                   title={tab.title}
                   aria-label={`Open ${tab.title || "Untitled"}`}
                   aria-current={currentSessionId() === tab.id ? "page" : undefined}
                   onClick={() => void openTab(tab)}
+                  onKeyDown={(event) => onTabKeyDown(event, index())}
                 >
                   <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
                     C
@@ -483,7 +555,8 @@ export default function Titlebar() {
                   type="button"
                   aria-label={`Close ${tab.title || "Untitled"}`}
                   title="Close tab"
-                  class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted opacity-0 transition-opacity hover:bg-edge-strong hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
+                  class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted opacity-0 transition-opacity hover:bg-edge-strong hover:text-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                  classList={{ "opacity-100": currentSessionId() === tab.id }}
                   onClick={() => closeTab(tab)}
                 >
                   <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
