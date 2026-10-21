@@ -27,6 +27,25 @@ import StatusPopover from "./status-popover"
 
 type ConnectionState = "connected" | "disconnected"
 
+/** 标签分组：同一项目（projectPath）下的会话标签归为一组 */
+interface TabGroup {
+  key: string
+  label: string
+  solid?: string
+  tabs: ActiveSession[]
+}
+
+/**
+ * projectLabel
+ * 参数：key 分组键（项目绝对路径，缺失时为 workspace id）
+ * 核心流程：取路径最后一段作为项目名，取不到时回退原值
+ */
+function projectLabel(key: string): string {
+  const parts = key.replace(/\/+$/, "").split("/").filter(Boolean)
+  return parts[parts.length - 1] || key
+}
+
+
 /**
  * routeSessionId
  * 参数：pathname 当前路由路径
@@ -74,6 +93,26 @@ export default function Titlebar() {
   const currentTab = () => openSessions().find((tab) => tab.id === currentSessionId())
   // 工作区配色键：项目路径优先，旧标签缺失路径时退化为 workspace id
   const tabColor = (tab: ActiveSession) => workspaceColor(tab.projectPath ?? tab.workspaceId)
+  /**
+   * tabGroups
+   * 参数：无
+   * 核心流程：按项目把标签分组（按首次出现顺序），组键用 projectPath ——
+   *           workspace id 是服务端内存态，重启后会变
+   */
+  const tabGroups = createMemo<TabGroup[]>(() => {
+    const groups = new Map<string, TabGroup>()
+    for (const tab of openSessions()) {
+      const key = tab.projectPath || tab.workspaceId
+      const existing = groups.get(key)
+      if (existing) {
+        existing.tabs.push(tab)
+        continue
+      }
+      groups.set(key, { key, label: projectLabel(key), solid: tabColor(tab)?.solid, tabs: [tab] })
+    }
+    return [...groups.values()]
+  })
+
   // 状态浮层数据源：当前会话所属工作区，回退到首页选中项
   const statusWsId = () => currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
 
@@ -92,6 +131,19 @@ export default function Titlebar() {
   const [pickerSessions, setPickerSessions] = createSignal<Session[]>([])
   const [pickerQuery, setPickerQuery] = createSignal("")
   const [pickerWsId, setPickerWsId] = createSignal("")
+
+  /** 选择器里的「已打开标签」：按项目分组，按查询过滤后丢弃空组 */
+  const filteredTabGroups = createMemo(() => {
+    const query = pickerQuery().trim().toLowerCase()
+    return tabGroups()
+      .map((group) => ({
+        ...group,
+        tabs: query
+          ? group.tabs.filter((tab) => (tab.title || "Untitled").toLowerCase().includes(query))
+          : group.tabs,
+      }))
+      .filter((group) => group.tabs.length > 0)
+  })
 
   const filteredSessions = createMemo(() => {
     const query = pickerQuery().trim().toLowerCase()
@@ -227,7 +279,7 @@ export default function Titlebar() {
   })
 
   onMount(() => {
-    // 全局快捷键：Ctrl+←/→ 按标签展示顺序切换会话（挂在 document 上，任意焦点位置可用）
+    // 全局快捷键：Ctrl+←/→ 组内切换、Ctrl+Shift+←/→ 按项目跳组（挂在 document 上）
     document.addEventListener("keydown", handleTabShortcut)
     onCleanup(() => document.removeEventListener("keydown", handleTabShortcut))
   })
@@ -307,15 +359,20 @@ export default function Titlebar() {
   /**
    * handleTabShortcut
    * 参数：event 全局键盘事件
-   * 核心流程：Ctrl+←/→ 切换标签；带其它修饰键、输入法组词、可编辑焦点、
-   *           或有浮层（会话选择器/标签菜单）打开时不处理
+   * 核心流程：Ctrl+←/→ 组内切换标签，Ctrl+Shift+←/→ 按项目跳组；
+   *           带其它修饰键、输入法组词、可编辑焦点、或有浮层打开时不处理
    */
   function handleTabShortcut(event: KeyboardEvent) {
-    if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    if (!event.ctrlKey || event.altKey || event.metaKey) return
     if (event.isComposing) return
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
     if (isEditableTarget(event.target) || pickerOpen() || tabsMenu()) return
     event.preventDefault()
+    // 带 Shift：按项目分组跳（相邻项目的第一个标签）；不带 Shift：组内线性切换
+    if (event.shiftKey) {
+      void switchGroup(event.key === "ArrowRight" ? 1 : -1)
+      return
+    }
     void switchTab(event.key === "ArrowRight" ? 1 : -1)
   }
 
@@ -358,8 +415,9 @@ export default function Titlebar() {
    * 核心流程：←/→ 按展示顺序移动焦点并切换会话（首尾循环），Home/End 跳首尾，
    *           Delete 关闭当前标签并把焦点交给相邻标签
    */
-  function onTabKeyDown(event: KeyboardEvent, index: number) {
+  function onTabKeyDown(event: KeyboardEvent, tabId: string) {
     const tabs = openSessions()
+    const index = tabs.findIndex((tab) => tab.id === tabId)
     const current = tabs[index]
     if (!current) return
     const go = (target: number) => {
@@ -393,10 +451,28 @@ export default function Titlebar() {
     }
   }
 
-  /** 漫游 tabindex：列表里只有一个 tab 进入 Tab 序列（优先当前会话所在标签） */
-  const rovingIndex = () => {
-    const index = openSessions().findIndex((tab) => tab.id === currentSessionId())
-    return index >= 0 ? index : 0
+  /** 漫游 tabindex：每组只有一个标签进入 Tab 序列（优先当前会话所在标签） */
+  const rovingTabId = () => {
+    const list = openSessions()
+    if (list.some((tab) => tab.id === currentSessionId())) return currentSessionId()
+    return list[0]?.id ?? ""
+  }
+
+  /**
+   * switchGroup
+   * 参数：delta 方向（1 下一个项目 / -1 上一个项目，首尾循环）
+   * 核心流程：按分组顺序取相邻项目 → 打开该组的第一个标签；
+   *           只有一个项目时不做任何事
+   */
+  async function switchGroup(delta: 1 | -1) {
+    const groups = tabGroups()
+    if (groups.length < 2) return
+    const currentKey = currentTab()?.projectPath || currentTab()?.workspaceId
+    const index = groups.findIndex((group) => group.key === currentKey)
+    const next = index === -1 ? 0 : (index + delta + groups.length) % groups.length
+    const target = groups[next]?.tabs[0]
+    if (!target || next === index) return
+    await openTab(target)
   }
 
   /**
@@ -496,12 +572,29 @@ export default function Titlebar() {
         <div
           ref={stripRef}
           onScroll={updateScrollState}
-          role="tablist"
-          aria-label="Open sessions"
           class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          <For each={openSessions()}>
-            {(tab, index) => (
+          <For each={tabGroups()}>
+            {(group, groupIndex) => (
+              <>
+                <Show when={groupIndex() > 0}>
+                  <span aria-hidden="true" class="mx-0.5 h-3.5 w-px shrink-0 bg-edge" />
+                </Show>
+                {/* 一个项目一组：组内标签紧邻，组首用项目色轨标记归属 */}
+                <div
+                  role="tablist"
+                  aria-label={group.label}
+                  title={group.label}
+                  data-workspace-group={group.key}
+                  class="flex min-w-0 shrink-0 items-center gap-1"
+                >
+                  <span
+                    aria-hidden="true"
+                    class="h-4 w-[2px] shrink-0 rounded-full"
+                    style={{ "background-color": group.solid ?? "transparent" }}
+                  />
+                  <For each={group.tabs}>
+                    {(tab) => (
               <div
                 data-session-tab={tab.id}
                 draggable={true}
@@ -538,13 +631,13 @@ export default function Titlebar() {
                   type="button"
                   role="tab"
                   aria-selected={currentSessionId() === tab.id}
-                  tabIndex={rovingIndex() === index() ? 0 : -1}
+                  tabIndex={rovingTabId() === tab.id ? 0 : -1}
                   class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-[6px] pl-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                   title={tab.title}
                   aria-label={`Open ${tab.title || "Untitled"}`}
                   aria-current={currentSessionId() === tab.id ? "page" : undefined}
                   onClick={() => void openTab(tab)}
-                  onKeyDown={(event) => onTabKeyDown(event, index())}
+                  onKeyDown={(event) => onTabKeyDown(event, tab.id)}
                 >
                   <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
                     C
@@ -564,6 +657,10 @@ export default function Titlebar() {
                   </svg>
                 </button>
               </div>
+                    )}
+                  </For>
+                </div>
+              </>
             )}
           </For>
         </div>
@@ -603,8 +700,20 @@ export default function Titlebar() {
                 Open tabs
               </div>
               <div class="max-h-72 overflow-y-auto py-1">
-                <For each={openSessions()}>
-                  {(tab) => (
+                <For each={tabGroups()}>
+                  {(group) => (
+                    <>
+                      <div class="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">
+                        <span
+                          aria-hidden="true"
+                          class="size-1.5 shrink-0 rounded-full"
+                          style={{ "background-color": group.solid ?? "transparent" }}
+                        />
+                        <span class="min-w-0 flex-1 truncate">{group.label}</span>
+                        <span class="shrink-0">{group.tabs.length}</span>
+                      </div>
+                      <For each={group.tabs}>
+                        {(tab) => (
                     <div class="flex items-center gap-1 px-1">
                       <button
                         type="button"
@@ -638,6 +747,9 @@ export default function Titlebar() {
                         </svg>
                       </button>
                     </div>
+                        )}
+                      </For>
+                    </>
                   )}
                 </For>
               </div>
@@ -702,6 +814,48 @@ export default function Titlebar() {
                 <Show when={!pickerLoading() && !pickerError() && filteredSessions().length === 0}>
                   <div class="px-3 py-2 text-[11px] text-faint">No sessions</div>
                 </Show>
+                {/* 已打开标签：按项目分组，跨项目也能直接跳转 */}
+                <Show when={filteredTabGroups().length > 0}>
+                  <div class="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">
+                    Open tabs
+                  </div>
+                  <For each={filteredTabGroups()}>
+                    {(group) => (
+                      <>
+                        <div class="flex items-center gap-1.5 px-3 py-1 text-[10px] text-faint">
+                          <span
+                            aria-hidden="true"
+                            class="size-1.5 shrink-0 rounded-full"
+                            style={{ "background-color": group.solid ?? "transparent" }}
+                          />
+                          <span class="min-w-0 flex-1 truncate">{group.label}</span>
+                          <span class="shrink-0">{group.tabs.length}</span>
+                        </div>
+                        <For each={group.tabs}>
+                          {(tab) => (
+                            <button
+                              type="button"
+                              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                              onClick={() => {
+                                setPickerOpen(false)
+                                void openTab(tab)
+                              }}
+                            >
+                              <span class="min-w-0 flex-1 truncate">{tab.title || "Untitled"}</span>
+                              <Show when={currentSessionId() === tab.id}>
+                                <span class="shrink-0 text-[10px] text-accent">current</span>
+                              </Show>
+                            </button>
+                          )}
+                        </For>
+                      </>
+                    )}
+                  </For>
+                  <div class="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">
+                    History
+                  </div>
+                </Show>
+
                 <For each={filteredSessions()}>
                   {(session) => (
                     <button
