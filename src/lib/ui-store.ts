@@ -171,6 +171,30 @@ export function ensureSessionTab(tab: ActiveSession) {
 }
 
 /**
+ * replaceSessionTab
+ * 参数：oldId 被顶替的会话标签 id；tab 新会话标签
+ * 核心流程：同索引替换并持久化 → 设新标签为当前会话；
+ *           旧标签已不存在（被关闭等）时退化为追加，保证新会话一定在标签栏出现
+ */
+export function replaceSessionTab(oldId: string, tab: ActiveSession) {
+  let replaced = false
+  setOpenSessions((prev) => {
+    const index = prev.findIndex((item) => item.id === oldId)
+    if (index === -1) return prev
+    replaced = true
+    const next = [...prev]
+    next[index] = tab
+    persistSessionTabs(next)
+    return next
+  })
+  if (!replaced) {
+    ensureSessionTab(tab)
+    return
+  }
+  setActiveSession(tab)
+}
+
+/**
  * updateSessionTab
  * 参数：tab 会话标签（标题/工作区可更新）
  * 核心流程：按 id 原地合并字段；若该会话是当前会话，同步更新 activeSession

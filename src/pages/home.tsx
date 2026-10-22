@@ -16,7 +16,8 @@ import {
   type Project,
   type Workspace,
 } from "../lib/workspaces"
-import { createSession, listSessions, type Session } from "../lib/sessions"
+import { listSessions, type Session } from "../lib/sessions"
+import { newSession, sessionUrl } from "../lib/session-actions"
 import { forgetProject, recalledWorkspacePath, recalledYolo, recentProjectPaths, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import SettingsDialog from "../components/settings-dialog"
 import { listDirs, type FsDirEntry } from "../lib/fs-browser"
@@ -553,20 +554,24 @@ function SessionsPanel(props: {
   /**
    * handleNewSession
    * 参数：无（读取 wsId）
-   * 核心流程：POST /workspaces/{wsId}/sessions → 成功跳转新会话页；失败 toast 后端 message
+   * 核心流程：newSession（复用当前 workspace id，失败才按路径重建）→ 成功跳转新会话页；
+   *           失败 toast 后端 message，首页列表不受影响
    */
   async function handleNewSession() {
     const wsId = props.wsId
     if (!wsId || creating()) return
     setCreating(true)
     try {
-      // 创建会话：空标题由后端存储，进入会话页后再补全
-      const created = await createSession(wsId)
-      navigate(`/w/${encodeURIComponent(wsId)}/session/${encodeURIComponent(created.id)}`)
-    } catch (err) {
-      props.onError(errorMessage(err))
+      // 新建会话：首页入口保持「追加标签」语义，不覆盖任何已打开会话
+      const result = await newSession({ workspaceId: wsId, projectPath: selectedWorkspace()?.path })
+      if (!result.ok) {
+        props.onError(result.error)
+        return
+      }
+      navigate(sessionUrl(result.tab))
+    } finally {
+      setCreating(false)
     }
-    setCreating(false)
   }
 
   const newSessionButton = () => (

@@ -7,7 +7,7 @@
  */
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
-import { createSession, listSessions, type Session } from "../lib/sessions"
+import { listSessions, type Session } from "../lib/sessions"
 import { createWorkspace } from "../lib/workspaces"
 import { recalledYolo, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import {
@@ -21,8 +21,10 @@ import {
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
+import { newSession, sessionUrl } from "../lib/session-actions"
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
+import NewSessionDialog from "./new-session-dialog"
 
 type ConnectionState = "connected" | "disconnected"
 
@@ -60,11 +62,6 @@ function routeSessionId(pathname: string): string {
   }
 }
 
-/** 会话页地址 */
-function sessionUrl(tab: ActiveSession): string {
-  return `/w/${encodeURIComponent(tab.workspaceId)}/session/${encodeURIComponent(tab.id)}`
-}
-
 /**
  * checkHealth
  * 参数：无
@@ -84,6 +81,11 @@ export default function Titlebar() {
   const location = useLocation()
   const [state, setState] = createSignal<ConnectionState>("disconnected")
   const [creating, setCreating] = createSignal(false)
+  // 新建失败的提示文案：不阻断当前会话，4s 后自动消失
+  const [createError, setCreateError] = createSignal("")
+  // 新建询问弹窗：选择「新 tab」或「覆盖当前 tab」
+  const [newDialogOpen, setNewDialogOpen] = createSignal(false)
+  let createErrorTimer: ReturnType<typeof setTimeout> | undefined
   // 快捷键切换中：解析 workspace 期间忽略连按，避免并发重建工作区
   const [switching, setSwitching] = createSignal(false)
   const [statusOpen, setStatusOpen] = createSignal(false)
@@ -291,30 +293,69 @@ export default function Titlebar() {
     onCleanup(() => document.removeEventListener("keydown", handleTabShortcut))
   })
 
+  onMount(() => {
+    /**
+     * handleNewSessionShortcut
+     * 参数：event 键盘事件
+     * 核心流程：Ctrl/Cmd+Shift+N 新建会话并顶替当前标签位（替换模式走快捷键）
+     */
+    const handleNewSessionShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return
+      if (event.key.toLowerCase() !== "n") return
+      event.preventDefault()
+      void handleNewSession(true)
+    }
+    document.addEventListener("keydown", handleNewSessionShortcut)
+    onCleanup(() => {
+      document.removeEventListener("keydown", handleNewSessionShortcut)
+      clearTimeout(createErrorTimer)
+    })
+  })
+
+  /**
+   * reportCreateError
+   * 参数：message 新建失败原因
+   * 核心流程：写入提示并在 4s 后清空，避免顶栏常驻错误文案
+   */
+  function reportCreateError(message: string) {
+    setCreateError(message)
+    clearTimeout(createErrorTimer)
+    createErrorTimer = setTimeout(() => setCreateError(""), 4000)
+  }
+
   /**
    * handleNewSession
-   * 参数：无（读取当前会话/选中工作区）
-   * 核心流程：确定 workspace → POST 新建会话 → 跳转会话页；失败静默回首页
+   * 参数：replace 为 true 时新会话顶替当前标签位（不新增标签）
+   * 核心流程：取当前标签的 workspace/项目路径 → newSession（复用已知 workspace id 直连，
+   *           失败才按路径重建）→ 成功跳转新会话；失败保留当前会话与草稿，只提示错误
    */
-  async function handleNewSession() {
-    const fallback = currentTab()?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
-    const path = selectedWorkspace()?.path ?? currentTab()?.projectPath
-    if ((!fallback && !path) || creating()) {
+  async function handleNewSession(replace: boolean) {
+    setNewDialogOpen(false)
+    const tab = currentTab()
+    const fallback = tab?.workspaceId ?? selectedWorkspace()?.id ?? activeSession()?.workspaceId
+    const path = selectedWorkspace()?.path ?? tab?.projectPath
+    if (creating()) return
+    if (!fallback && !path) {
       navigate("/")
       return
     }
     setCreating(true)
+    setCreateError("")
     try {
-      // 新建会话：先解析当前有效工作区，成功后进入新会话，由会话页追加标签
-      const wsId = await ensureLiveWorkspace(path, fallback)
-      if (!wsId) throw new Error("Workspace unavailable")
-      const created = await createSession(wsId)
-      navigate(sessionUrl({ id: created.id, title: "Untitled", workspaceId: wsId, projectPath: path }))
-    } catch {
-      // 新建失败：回到首页由页面给出可见错误
-      navigate("/")
+      // 新建会话：已有 workspace id 直接复用，替换模式下顶替当前标签位
+      const result = await newSession({
+        workspaceId: fallback,
+        projectPath: path,
+        replaceSessionId: replace ? tab?.id : undefined,
+      })
+      if (!result.ok) {
+        reportCreateError(result.error)
+        return
+      }
+      navigate(sessionUrl(result.tab))
+    } finally {
+      setCreating(false)
     }
-    setCreating(false)
   }
 
   /**
@@ -773,19 +814,34 @@ export default function Titlebar() {
           </Show>
         </Show>
 
-        {/* 新建会话：始终可用；无工作区时回首页 */}
-        <button
-          type="button"
-          aria-label="New session"
-          title="New session"
-          class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text disabled:opacity-40"
-          disabled={creating()}
-          onClick={() => void handleNewSession()}
-        >
-          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
-          </svg>
-        </button>
+        {/* 新建会话：单击/右键都先弹窗询问「新 tab」还是「覆盖当前 tab」 */}
+        <div class="relative shrink-0">
+          <button
+            type="button"
+            aria-label="New session"
+            aria-haspopup="dialog"
+            aria-expanded={newDialogOpen()}
+            title="New session (Ctrl+Shift+N: replace current)"
+            class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text disabled:opacity-40"
+            disabled={creating()}
+            onClick={() => setNewDialogOpen(true)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setNewDialogOpen(true)
+            }}
+          >
+            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
+            </svg>
+          </button>
+
+          {/* 新建失败提示：保留当前会话，只用气泡告知原因 */}
+          <Show when={createError()}>
+            <div class="absolute right-0 top-8 z-50 w-56 rounded-xl border border-edge bg-base px-2.5 py-2 text-[11px] leading-4 text-[#e5484d] shadow-xl">
+              {createError()}
+            </div>
+          </Show>
+        </div>
 
         {/* 打开已有会话：从当前项目历史会话中选择并作为标签打开 */}
         <div class="relative">
@@ -923,6 +979,15 @@ export default function Titlebar() {
           </Show>
         </div>
       </div>
+
+      {/* 新建询问弹窗：默认新 tab，覆盖当前只在有当前会话时可选 */}
+      <NewSessionDialog
+        open={newDialogOpen()}
+        currentTitle={currentTab()?.title}
+        busy={creating()}
+        onClose={() => setNewDialogOpen(false)}
+        onChoose={(mode) => void handleNewSession(mode === "replace")}
+      />
     </header>
   )
 }
