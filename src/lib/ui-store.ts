@@ -274,3 +274,49 @@ export function retargetSessionTabs(projectPath: string, workspaceId: string) {
   })
   setActiveSession((prev) => (prev && prev.projectPath === projectPath ? { ...prev, workspaceId } : prev))
 }
+
+/** 标签栏布局：横向（顶栏）或纵向（左侧栏） */
+export type TabsOrientation = "horizontal" | "vertical"
+
+const TABS_ORIENTATION_KEY = "crush.tabsOrientation"
+
+/**
+ * readTabsOrientation
+ * 参数：无
+ * 核心流程：从 localStorage 读取布局偏好，只认 "vertical"，其余一律回落横向；
+ *           存储不可用时同样回落，避免首屏渲染报错
+ */
+function readTabsOrientation(): TabsOrientation {
+  try {
+    return localStorage.getItem(TABS_ORIENTATION_KEY) === "vertical" ? "vertical" : "horizontal"
+  } catch {
+    return "horizontal"
+  }
+}
+
+const [tabsOrientation, setTabsOrientationSignal] = createSignal<TabsOrientation>(readTabsOrientation())
+
+export { tabsOrientation }
+
+/**
+ * setTabsOrientation
+ * 参数：next 目标布局
+ * 核心流程：更新 signal 驱动布局重排 → 写入 localStorage；存储失败仅本次页面生效
+ */
+export function setTabsOrientation(next: TabsOrientation) {
+  setTabsOrientationSignal(next)
+  try {
+    localStorage.setItem(TABS_ORIENTATION_KEY, next)
+  } catch {
+    // localStorage 不可用：仅当前会话内生效
+  }
+}
+
+/**
+ * toggleTabsOrientation
+ * 参数：无
+ * 核心流程：在横向/纵向之间切换，供标题栏按钮调用
+ */
+export function toggleTabsOrientation() {
+  setTabsOrientation(tabsOrientation() === "vertical" ? "horizontal" : "vertical")
+}

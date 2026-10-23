@@ -18,6 +18,8 @@ import {
   reorderSessionTabs,
   retargetSessionTabs,
   setActiveSession,
+  tabsOrientation,
+  toggleTabsOrientation,
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
@@ -91,6 +93,8 @@ export default function Titlebar() {
   const [statusOpen, setStatusOpen] = createSignal(false)
   // 当前路由对应的会话标签：用于高亮与工作区回退
   const currentSessionId = () => routeSessionId(location.pathname)
+  // 标签栏布局：纵向时标签移到左侧栏，顶栏只保留操作按钮
+  const vertical = () => tabsOrientation() === "vertical"
   const currentTab = () => openSessions().find((tab) => tab.id === currentSessionId())
   // 工作区配色键：项目路径优先，旧标签缺失路径时退化为 workspace id
   const tabColor = (tab: ActiveSession) => workspaceColor(tab.projectPath ?? tab.workspaceId)
@@ -127,6 +131,7 @@ export default function Titlebar() {
 
   // 标签溢出与「已存在会话」选择器
   let stripRef: HTMLDivElement | undefined
+  let stripObserver: ResizeObserver | undefined
   let searchRef: HTMLInputElement | undefined
   const [canLeft, setCanLeft] = createSignal(false)
   const [canRight, setCanRight] = createSignal(false)
@@ -182,9 +187,24 @@ export default function Titlebar() {
     stripRef?.scrollBy({ left: delta, behavior: "smooth" })
   }
 
-  // 标签增删后重新计算溢出状态（DOM 更新后测量）
+  /**
+   * attachStrip
+   * 参数：el 横向标签条元素
+   * 核心流程：切换布局会重建标签条，用回调 ref 重新挂 ResizeObserver，
+   *           替代只在挂载时绑定一次的写法
+   */
+  function attachStrip(el: HTMLDivElement) {
+    stripRef = el
+    stripObserver?.disconnect()
+    stripObserver = new ResizeObserver(updateScrollState)
+    stripObserver.observe(el)
+    updateScrollState()
+  }
+
+  // 标签增删、布局切换后重新计算溢出状态（DOM 更新后测量）
   createEffect(() => {
     openSessions()
+    vertical()
     queueMicrotask(updateScrollState)
   })
 
@@ -265,13 +285,7 @@ export default function Titlebar() {
     navigate(sessionUrl(tab))
   }
 
-  onMount(() => {
-    const el = stripRef
-    if (!el) return
-    const observer = new ResizeObserver(updateScrollState)
-    observer.observe(el)
-    onCleanup(() => observer.disconnect())
-  })
+  onMount(() => onCleanup(() => stripObserver?.disconnect()))
 
   onMount(() => {
     // 首次探测 + 每 5s 轮询，结果驱动状态圆点颜色
@@ -414,15 +428,18 @@ export default function Titlebar() {
   function handleTabShortcut(event: KeyboardEvent) {
     if (!event.ctrlKey || event.altKey || event.metaKey) return
     if (event.isComposing) return
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    // 纵向标签栏沿屏幕纵向排列，方向键也跟着换轴
+    const [prevKey, nextKey] = vertical() ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"]
+    if (event.key !== prevKey && event.key !== nextKey) return
     if (isEditableTarget(event.target) || pickerOpen() || tabsMenu()) return
     event.preventDefault()
+    const delta: 1 | -1 = event.key === nextKey ? 1 : -1
     // 带 Shift：按项目分组跳（相邻项目的第一个标签）；不带 Shift：组内线性切换
     if (event.shiftKey) {
-      void switchGroup(event.key === "ArrowRight" ? 1 : -1)
+      void switchGroup(delta)
       return
     }
-    void switchTab(event.key === "ArrowRight" ? 1 : -1)
+    void switchTab(delta)
   }
 
   /**
@@ -486,9 +503,11 @@ export default function Titlebar() {
     }
     switch (event.key) {
       case "ArrowLeft":
+      case "ArrowUp":
         go((index - 1 + tabs.length) % tabs.length)
         return
       case "ArrowRight":
+      case "ArrowDown":
         go((index + 1) % tabs.length)
         return
       case "Home":
@@ -556,7 +575,10 @@ export default function Titlebar() {
     event.preventDefault()
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move"
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-    const after = event.clientX > rect.left + rect.width / 2
+    // 纵向标签栏按上/下半区判断插入位，横向按左/右半区
+    const after = vertical()
+      ? event.clientY > rect.top + rect.height / 2
+      : event.clientX > rect.left + rect.width / 2
     const current = dropTarget()
     if (!current || current.id !== tab.id || current.after !== after) setDropTarget({ id: tab.id, after })
   }
@@ -587,8 +609,95 @@ export default function Titlebar() {
     setDropTarget(undefined)
   }
 
+  /**
+   * TabItem
+   * 参数：tab 会话标签；vertical 纵向布局（整行满宽、插入指示改上下方向）
+   * 核心流程：色条 + 标题 + 关闭按钮；横向/纵向共用同一套拖拽、键盘与高亮逻辑，
+   *           只在尺寸和插入指示方向上区分
+   */
+  function TabItem(props: { tab: ActiveSession; vertical: boolean }) {
+    const active = () => currentSessionId() === props.tab.id
+    return (
+      <div
+        data-session-tab={props.tab.id}
+        draggable={true}
+        onDragStart={(event) => startTabDrag(event, props.tab)}
+        onDragOver={(event) => overTab(event, props.tab)}
+        onDragLeave={() => {
+          if (dropTarget()?.id === props.tab.id) setDropTarget(undefined)
+        }}
+        onDrop={(event) => dropTab(event, props.tab)}
+        onDragEnd={endTabDrag}
+        class="group relative flex min-w-0 items-center rounded-[6px] pr-1 transition-colors"
+        classList={{
+          "h-[26px] max-w-[220px] shrink-0": !props.vertical,
+          "h-7 w-full": props.vertical,
+          "bg-raised text-text": active(),
+          "text-muted hover:bg-raised/60": !active(),
+          "opacity-40": draggingTabId() === props.tab.id,
+        }}
+        style={{ "background-color": active() ? tabColor(props.tab)?.tint : undefined }}
+      >
+        {/* 拖拽插入位：横向画竖线，纵向画横线 */}
+        <Show when={dropTarget()?.id === props.tab.id}>
+          <span
+            aria-hidden="true"
+            class="pointer-events-none absolute rounded-full bg-accent"
+            classList={{
+              "top-0 bottom-0 w-[2px]": !props.vertical,
+              "left-0 right-0 h-[2px]": props.vertical,
+              "left-0": !props.vertical && dropTarget()?.after === false,
+              "right-0": !props.vertical && dropTarget()?.after === true,
+              "top-0": props.vertical && dropTarget()?.after === false,
+              "bottom-0": props.vertical && dropTarget()?.after === true,
+            }}
+          />
+        </Show>
+        {/* 工作区色条：同一工作区固定同色，跨 tab 快速识别 */}
+        <span
+          aria-hidden="true"
+          class="ml-1 h-3 w-[3px] shrink-0 rounded-full"
+          style={{ "background-color": tabColor(props.tab)?.solid ?? "transparent" }}
+        />
+        <button
+          type="button"
+          role="tab"
+          aria-selected={active()}
+          tabIndex={rovingTabId() === props.tab.id ? 0 : -1}
+          class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-[6px] pl-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          title={props.tab.title}
+          aria-label={`Open ${props.tab.title || "Untitled"}`}
+          aria-current={active() ? "page" : undefined}
+          onClick={() => void openTab(props.tab)}
+          onKeyDown={(event) => onTabKeyDown(event, props.tab.id)}
+        >
+          <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
+            C
+          </span>
+          <span class="min-w-0 flex-1 truncate text-[12px]">{props.tab.title || "Untitled"}</span>
+        </button>
+        <button
+          type="button"
+          aria-label={`Close ${props.tab.title || "Untitled"}`}
+          title="Close tab"
+          class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted opacity-0 transition-opacity hover:bg-edge-strong hover:text-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+          classList={{ "opacity-100": active() }}
+          onClick={() => closeTab(props.tab)}
+        >
+          <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <header class="flex h-9 shrink-0 flex-row items-center justify-between gap-2 border-b border-edge bg-deep pl-1.5 pr-2">
+    <div class="contents">
+    <header
+      class="flex h-9 shrink-0 flex-row items-center justify-between gap-2 border-b border-edge bg-deep pl-1.5 pr-2"
+      classList={{ "col-start-2 row-start-1": vertical() }}
+    >
       <div class="relative flex min-w-0 flex-1 items-center gap-1">
         {/* 主页按钮：图标按钮，回到首页 */}
         <button
@@ -610,6 +719,7 @@ export default function Titlebar() {
           <span class="truncate px-1 text-[13px] font-semibold text-text">Crush</span>
         </Show>
 
+        <Show when={!vertical()}>
         {/* 标签溢出时提供左右滚动，避免被隐藏的标签点不到 */}
         <Show when={canLeft()}>
           <button
@@ -627,7 +737,7 @@ export default function Titlebar() {
 
         {/* 多会话标签：横向滚动，点击切换，关闭后自动跳到相邻标签 */}
         <div
-          ref={stripRef}
+          ref={attachStrip}
           onScroll={updateScrollState}
           class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
@@ -652,68 +762,7 @@ export default function Titlebar() {
                   />
                   <For each={group.tabs}>
                     {(tab) => (
-              <div
-                data-session-tab={tab.id}
-                draggable={true}
-                onDragStart={(event) => startTabDrag(event, tab)}
-                onDragOver={(event) => overTab(event, tab)}
-                onDragLeave={() => {
-                  if (dropTarget()?.id === tab.id) setDropTarget(undefined)
-                }}
-                onDrop={(event) => dropTab(event, tab)}
-                onDragEnd={endTabDrag}
-                class="group relative flex h-[26px] max-w-[220px] min-w-0 shrink-0 items-center rounded-[6px] pr-1 transition-colors"
-                classList={{
-                  "bg-raised text-text": currentSessionId() === tab.id,
-                  "text-muted hover:bg-raised/60": currentSessionId() !== tab.id,
-                  "opacity-40": draggingTabId() === tab.id,
-                }}
-                style={{ "background-color": currentSessionId() === tab.id ? tabColor(tab)?.tint : undefined }}
-              >
-                {/* 拖拽插入位：按落点落在目标左侧或右侧绘制竖线 */}
-                <Show when={dropTarget()?.id === tab.id}>
-                  <span
-                    aria-hidden="true"
-                    class="pointer-events-none absolute top-0 bottom-0 w-[2px] rounded-full bg-accent"
-                    classList={{ "left-0": dropTarget()?.after === false, "right-0": dropTarget()?.after === true }}
-                  />
-                </Show>
-                {/* 工作区色条：同一工作区固定同色，跨 tab 快速识别 */}
-                <span
-                  aria-hidden="true"
-                  class="ml-1 h-3 w-[3px] shrink-0 rounded-full"
-                  style={{ "background-color": tabColor(tab)?.solid ?? "transparent" }}
-                />
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={currentSessionId() === tab.id}
-                  tabIndex={rovingTabId() === tab.id ? 0 : -1}
-                  class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-[6px] pl-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-                  title={tab.title}
-                  aria-label={`Open ${tab.title || "Untitled"}`}
-                  aria-current={currentSessionId() === tab.id ? "page" : undefined}
-                  onClick={() => void openTab(tab)}
-                  onKeyDown={(event) => onTabKeyDown(event, tab.id)}
-                >
-                  <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
-                    C
-                  </span>
-                  <span class="min-w-0 flex-1 truncate text-[12px]">{tab.title || "Untitled"}</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Close ${tab.title || "Untitled"}`}
-                  title="Close tab"
-                  class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted opacity-0 transition-opacity hover:bg-edge-strong hover:text-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-                  classList={{ "opacity-100": currentSessionId() === tab.id }}
-                  onClick={() => closeTab(tab)}
-                >
-                  <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke-linecap="round" />
-                  </svg>
-                </button>
-              </div>
+              <TabItem tab={tab} vertical={false} />
                     )}
                   </For>
                 </div>
@@ -812,6 +861,8 @@ export default function Titlebar() {
               </div>
             </div>
           </Show>
+        </Show>
+
         </Show>
 
         {/* 新建会话：单击/右键都先弹窗询问「新 tab」还是「覆盖当前 tab」 */}
@@ -950,6 +1001,31 @@ export default function Titlebar() {
       </div>
 
       <div class="flex shrink-0 items-center gap-1">
+        {/* 标签栏布局：横向/纵向切换，选择持久化到 localStorage */}
+        <button
+          type="button"
+          aria-label={vertical() ? "Switch to horizontal tabs" : "Switch to vertical tabs"}
+          title={vertical() ? "标签栏：切换为横向" : "标签栏：切换为纵向"}
+          aria-pressed={vertical()}
+          class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
+          onClick={() => toggleTabsOrientation()}
+        >
+          <Show
+            when={vertical()}
+            fallback={
+              <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.4">
+                <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+                <path d="M6.5 3v10" />
+              </svg>
+            }
+          >
+            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.4">
+              <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+              <path d="M2.5 6.5h11" />
+            </svg>
+          </Show>
+        </button>
+
         {/* 主题选择：下拉列出全部主题，选中即切换 */}
         <ThemeSelect />
 
@@ -989,5 +1065,46 @@ export default function Titlebar() {
         onChoose={(mode) => void handleNewSession(mode === "replace")}
       />
     </header>
+
+      {/* 纵向标签栏：左侧独立栏，分组与横向模式一致 */}
+      <Show when={vertical()}>
+        <aside
+          class="col-start-1 row-span-2 row-start-1 flex min-h-0 flex-col border-r border-edge bg-deep"
+          aria-label="Session tabs"
+        >
+          <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge px-2.5">
+            <span class="text-[10px] font-semibold tracking-wide text-faint uppercase">Tabs</span>
+            <span class="text-[10px] text-faint">{openSessions().length}</span>
+          </div>
+          <Show
+            when={openSessions().length > 0}
+            fallback={<div class="px-2.5 py-2 text-[11px] text-faint">No open tabs</div>}
+          >
+            <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+              <For each={tabGroups()}>
+                {(group) => (
+                  <div class="mb-2 min-w-0" data-workspace-group={group.key}>
+                    <div class="flex items-center gap-1.5 px-1 pb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">
+                      <span
+                        aria-hidden="true"
+                        class="size-1.5 shrink-0 rounded-full"
+                        style={{ "background-color": group.solid ?? "transparent" }}
+                      />
+                      <span class="min-w-0 flex-1 truncate" title={group.label}>
+                        {group.label}
+                      </span>
+                      <span class="shrink-0">{group.tabs.length}</span>
+                    </div>
+                    <div role="tablist" aria-label={group.label} class="flex min-w-0 flex-col gap-0.5">
+                      <For each={group.tabs}>{(tab) => <TabItem tab={tab} vertical={true} />}</For>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </aside>
+      </Show>
+    </div>
   )
 }
