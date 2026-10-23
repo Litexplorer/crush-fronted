@@ -11,7 +11,7 @@
  *           image_url/binary 图片缩略图（点击放大），非图片 binary 仍显示 [image] 占位
  *           finish          底部一行小字（结果 + 耗时）
  */
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import type { ContentPart, SessionMessage } from "../../lib/sessions"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
@@ -19,7 +19,8 @@ import { MindmapText } from "./mindmap-text"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
-import ViewCode, { parseViewData } from "./view-code"
+import ViewCode, { parseViewData, parseViewImage, ViewImage } from "./view-code"
+import ImagePreview from "./image-preview"
 import BashBody, { parseBashData } from "./bash-card"
 import McpArgs from "./mcp-card"
 import { useSubagentStore } from "./subagent-context"
@@ -113,53 +114,6 @@ export function imageSrc(part: ContentPart): string | undefined {
 }
 
 /**
- * MessageImage
- * 参数：src 图片地址；alt 无障碍文案
- * 核心流程：消息内展示限高缩略图，点击打开全屏遮罩预览，再点任意处关闭
- */
-function MessageImage(props: { src: string; alt?: string }) {
-  const [open, setOpen] = createSignal(false)
-
-  // 全屏预览打开时监听 Escape：与点击遮罩一样关闭预览
-  createEffect(() => {
-    if (!open()) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false)
-    }
-    document.addEventListener("keydown", onKey)
-    onCleanup(() => document.removeEventListener("keydown", onKey))
-  })
-
-  return (
-    <>
-      <button
-        type="button"
-        class="block max-w-full overflow-hidden rounded-lg border border-edge transition-opacity hover:opacity-90"
-        onClick={() => setOpen(true)}
-      >
-        <img
-          src={props.src}
-          alt={props.alt ?? "attachment"}
-          class="max-h-[240px] max-w-full object-contain"
-        />
-      </button>
-      <Show when={open()}>
-        <div
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
-          onClick={() => setOpen(false)}
-        >
-          <img
-            src={props.src}
-            alt={props.alt ?? "attachment"}
-            class="max-h-full max-w-full object-contain"
-          />
-        </div>
-      </Show>
-    </>
-  )
-}
-
-/**
  * partText
  * 参数：part 内容分片
  * 核心流程：读取 text 分片纯文本；hidden 分片（上下文注入）与空文本返回空串
@@ -235,7 +189,7 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
               // 图片分片：binary（base64）或 image_url，转成缩略图
               const src = imageSrc(part)
               if (!src) return null
-              return <MessageImage src={src} />
+              return <ImagePreview src={src} />
             }}
           </For>
         </div>
@@ -478,7 +432,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
             case "binary": {
               // 图片渲染缩略图；文本/其他附件（@ 引用）渲染成文件名 chip，避免误标成图片
               const src = imageSrc(part)
-              if (src) return <MessageImage src={src} />
+              if (src) return <ImagePreview src={src} />
               const bin = data as BinaryPartData
               const path = bin.Path ?? ""
               const name = path.split("/").filter(Boolean).pop() ?? "attachment"
@@ -588,6 +542,12 @@ function ToolCard(props: {
       ? parseEditDiff(props.inputRaw, props.result?.metadata)
       : undefined,
   )
+  // view 结果带 image/* 的 base64 时走图片卡：缩略图 + 尺寸 + 体积
+  const viewImage = createMemo(() =>
+    props.open && !hasError() && /^view$/i.test(props.name)
+      ? parseViewImage(props.inputRaw, props.result?.mime_type, props.result?.data, props.result?.metadata)
+      : undefined,
+  )
   // view 展开时改用代码卡：文件路径 + 行号 + 高亮，metadata 缺失时回退解析 <file> 块
   const viewData = createMemo(() =>
     props.open && !hasError() && /^view$/i.test(props.name)
@@ -605,6 +565,7 @@ function ToolCard(props: {
     (!isMcp() && !!props.inputRaw) ||
     !!props.result?.content ||
     !!editDiff() ||
+    !!viewImage() ||
     !!viewData() ||
     !!bashData()
   return (
@@ -653,6 +614,7 @@ function ToolCard(props: {
       <Show when={props.open && hasBody() && !bashData()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
           <Switch>
+            <Match when={viewImage()}>{(data) => <ViewImage data={data()} />}</Match>
             <Match when={viewData()}>{(data) => <ViewCode data={data()} />}</Match>
             <Match when={editDiff()}>{(diff) => <EditDiff data={diff()} />}</Match>
             <Match when={true}>
