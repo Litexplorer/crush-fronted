@@ -15,6 +15,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { getSession, listMessages, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
 import { cancel, getAgent, initAgent, newRunId, sendMessage, setCurrentSession } from "../lib/agent"
 import { closeEvents, ensureEvents, eventsConnection, onEventsOpen, subscribeEvents, type WorkspaceEvent } from "../lib/events"
+import { setSessionRunning } from "../lib/run-status"
 import { grantPermission, getSkip, setSkip, type PermissionAction, type PermissionRequest } from "../lib/permissions"
 import { answerQuestions, cancelQuestions, type QuestionRequest, type QuestionResponse } from "../lib/questions"
 import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type ToolResultPartData } from "../components/message/parts"
@@ -224,6 +225,16 @@ export default function Session() {
 
   const [messages, setMessages] = createSignal<ChatMessage[]>([])
   const [busy, setBusy] = createSignal(false)
+  // 本地 busy 同步到全局运行表：点发送后标签栏立刻出现运行图标，不必等 SSE。
+  // 必须以「已加载的 session」为准：路由参数在请求返回前就变了，
+  // 直接读 params.sessionId 会把上一个会话的 busy 记到新标签上
+  createEffect(() => {
+    const current = session()
+    // 只在 ready 时上报：切换过程中 session/busy 分属新旧两个会话，
+    // 此时写回会把仍在运行的旧会话误清掉
+    if (!current || state() !== "ready") return
+    setSessionRunning(current.id, busy())
+  })
   const [sending, setSending] = createSignal(false)
   // 手动刷新：重新拉取会话详情与消息列表，期间按钮旋转并禁用
   const [refreshing, setRefreshing] = createSignal(false)
@@ -457,8 +468,10 @@ export default function Session() {
     try {
       const data = await getSession(wsId, sid)
       if (params.sessionId !== sid) return
-      setSession(data)
+      // 先写 busy 再写 session：同步 effect 按「已加载会话」上报运行状态，
+      // 若顺序反了，切换标签瞬间会把上一个会话的 busy 记到新会话头上
       setBusy(data.is_busy)
+      setSession(data)
       updateSessionTab({ id: data.id, title: data.title || "Untitled", workspaceId: wsId, projectPath })
       setState("ready")
     } catch (err) {

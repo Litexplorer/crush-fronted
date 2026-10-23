@@ -23,6 +23,7 @@ import {
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
+import { isSessionRunning } from "../lib/run-status"
 import { newSession, sessionUrl } from "../lib/session-actions"
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
@@ -674,6 +675,20 @@ export default function Titlebar() {
           <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
             C
           </span>
+          {/* 运行中：该会话正在产出消息，转圈图标与时间线的运行指示呼应 */}
+          <Show when={isSessionRunning(props.tab.id)}>
+            <svg
+              viewBox="0 0 16 16"
+              class="size-3 shrink-0 animate-spin text-accent"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              role="status"
+              aria-label="Running"
+            >
+              <path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" stroke-linecap="round" />
+            </svg>
+          </Show>
           <span class="min-w-0 flex-1 truncate text-[12px]">{props.tab.title || "Untitled"}</span>
         </button>
         <button
