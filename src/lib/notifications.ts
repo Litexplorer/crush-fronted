@@ -34,6 +34,8 @@ const MAX_DETAIL_CHARS = 120
 
 const [notifications, setNotifications] = createSignal<SessionNotification[]>([])
 const [viewingSessionId, setViewingSessionIdRaw] = createSignal<string | undefined>(undefined)
+/** 有「已完成但没看」结果的会话：标签上打角标用，独立于气泡（气泡会消失、会被覆盖） */
+const [unreadSessions, setUnreadSessions] = createSignal<ReadonlySet<string>>(new Set())
 
 /** 会话完成后是否弹通知：供未来加开关用，默认开 */
 const [notifyEnabled] = createSignal(true)
@@ -82,12 +84,38 @@ function clearTimer(sessionId: string) {
 }
 
 /**
+ * isSessionUnread
+ * 参数：sessionId 会话 ID
+ * 核心流程：查未读集合，供标签栏渲染「已完成未看」角标
+ */
+export function isSessionUnread(sessionId: string): boolean {
+  return unreadSessions().has(sessionId)
+}
+
+/**
+ * markUnread
+ * 参数：sessionId 会话 ID；unread 是否标为未读
+ * 核心流程：幂等增删未读集合；集合未变化时不触发信号更新，避免多余重渲染
+ */
+function markUnread(sessionId: string, unread: boolean) {
+  if (!sessionId) return
+  setUnreadSessions((prev) => {
+    if (prev.has(sessionId) === unread) return prev
+    const next = new Set(prev)
+    if (unread) next.add(sessionId)
+    else next.delete(sessionId)
+    return next
+  })
+}
+
+/**
  * dismissNotification
  * 参数：sessionId 会话 ID
- * 核心流程：移除通知并清掉计时器；手动关闭与倒计时到期都走这里
+ * 核心流程：移除通知、清掉计时器并消掉未读角标；手动关闭与倒计时到期都走这里
  */
 export function dismissNotification(sessionId: string) {
   clearTimer(sessionId)
+  markUnread(sessionId, false)
   setNotifications((prev) => (prev.some((item) => item.sessionId === sessionId) ? prev.filter((item) => item.sessionId !== sessionId) : prev))
 }
 
@@ -114,11 +142,13 @@ function startTimerIfViewing(sessionId: string) {
 /**
  * setViewingSession
  * 参数：sessionId 当前打开的会话（不在会话页时为 undefined）
- * 核心流程：切换当前会话 → 进入的会话开始 10 秒倒计时、离开的会话暂停计时保持常驻
+ * 核心流程：切换当前会话 → 进入的会话清掉未读角标并开始 10 秒倒计时、
+ *           离开的会话暂停计时保持常驻
  */
 export function setViewingSession(sessionId: string | undefined) {
   if (viewingSessionId() === sessionId) return
   setViewingSessionIdRaw(sessionId)
+  if (sessionId) markUnread(sessionId, false)
   for (const item of notifications()) startTimerIfViewing(item.sessionId)
 }
 
@@ -141,7 +171,10 @@ function pushNotification(sessionId: string, text: string | undefined, status: N
   }
   clearTimer(sessionId)
   setNotifications((prev) => [entry, ...prev.filter((item) => item.sessionId !== sessionId)].slice(0, MAX_NOTIFICATIONS))
-  if (viewingSessionId() === sessionId) playNotificationSound()
+  const viewing = viewingSessionId() === sessionId
+  // 不在这个会话里跑完的，标签上留一个角标：气泡会超时消失，角标要一直在
+  markUnread(sessionId, !viewing)
+  if (viewing) playNotificationSound()
   startTimerIfViewing(sessionId)
 }
 

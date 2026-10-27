@@ -12,6 +12,7 @@ import { selectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
   closeSessionTab,
+  commandPaletteOpen,
   ensureSessionTab,
   openSessions,
   reorderSessionTabs,
@@ -22,6 +23,8 @@ import {
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
 import { isSessionRunning } from "../lib/run-status"
+import { dismissNotification, isSessionUnread } from "../lib/notifications"
+import { armPrefix, cancelPrefix, consumePrefix, prefixActive } from "../lib/key-prefix"
 import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-actions"
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
@@ -278,9 +281,13 @@ export default function Titlebar() {
   })
 
   onMount(() => {
-    // 全局快捷键：Ctrl+←/→ 组内切换、Ctrl+Shift+←/→ 按项目跳组（挂在 document 上）
+    // 全局快捷键：Ctrl+B 当前缀，之后单独按 ←/→ 组内切换、Shift+←/→ 按项目跳组（挂在 document 上）
+    document.addEventListener("keydown", handlePrefixShortcut)
     document.addEventListener("keydown", handleTabShortcut)
-    onCleanup(() => document.removeEventListener("keydown", handleTabShortcut))
+    onCleanup(() => {
+      document.removeEventListener("keydown", handlePrefixShortcut)
+      document.removeEventListener("keydown", handleTabShortcut)
+    })
   })
 
   onMount(() => {
@@ -384,30 +391,56 @@ export default function Titlebar() {
   }
 
   /**
-   * isEditableTarget
-   * 参数：target 键盘事件目标
-   * 核心流程：判断焦点是否落在可编辑元素上（输入框/文本域/下拉/contenteditable），
-   *           这些元素里 Ctrl+方向键另有含义（按词移动光标），快捷键必须让位
+   * tabArrowKeys
+   * 参数：无
+   * 核心流程：按标签栏方向给出「上一个 / 下一个」对应的方向键；
+   *           横向用 ←/→，纵向用 ↑/↓，前缀处理与切换逻辑共用同一份轴定义
    */
-  function isEditableTarget(target: EventTarget | null): boolean {
-    const el = target as HTMLElement | null
-    if (!el || typeof el.closest !== "function") return false
-    return !!el.closest("input, textarea, select, [contenteditable='true']")
+  function tabArrowKeys(): [string, string] {
+    return vertical() ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"]
+  }
+
+  /**
+   * handlePrefixShortcut
+   * 参数：event 全局键盘事件
+   * 核心流程：Ctrl/Cmd+B 进入「前缀待命」（输入框里同样生效，先 preventDefault 挡掉加粗等默认行为）；
+   *           待命期间本轴方向键留给标签切换，其余按键（含另一根轴的方向键）立即退出待命
+   */
+  function handlePrefixShortcut(event: KeyboardEvent) {
+    if (event.isComposing) return
+    // 面板打开时不接管：它的输入框自己处理按键
+    if (commandPaletteOpen()) {
+      if (prefixActive()) cancelPrefix()
+      return
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "b") {
+      event.preventDefault()
+      armPrefix()
+      return
+    }
+    if (!prefixActive()) return
+    // 只按修饰键不算「别的键」：待命要留到方向键按下
+    if (event.key === "Control" || event.key === "Shift" || event.key === "Alt" || event.key === "Meta") return
+    const [prevKey, nextKey] = tabArrowKeys()
+    // 本轴方向键不再需要 Ctrl：直接交给 handleTabShortcut 消费
+    if (event.key === prevKey || event.key === nextKey) return
+    cancelPrefix()
   }
 
   /**
    * handleTabShortcut
    * 参数：event 全局键盘事件
-   * 核心流程：Ctrl+←/→ 组内切换标签，Ctrl+Shift+←/→ 按项目跳组；
-   *           带其它修饰键、输入法组词、可编辑焦点、或有浮层打开时不处理
+   * 核心流程：先按 Ctrl+B 进入待命，随后单独按方向键即可组内切换标签、
+   *           按 Shift+方向键按项目跳组；没有前缀一律不处理，方向键保持原生含义
    */
   function handleTabShortcut(event: KeyboardEvent) {
-    if (!event.ctrlKey || event.altKey || event.metaKey) return
     if (event.isComposing) return
-    // 纵向标签栏沿屏幕纵向排列，方向键也跟着换轴
-    const [prevKey, nextKey] = vertical() ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"]
+    if (event.altKey) return
+    if (pickerOpen() || tabsMenu() || commandPaletteOpen()) return
+    const [prevKey, nextKey] = tabArrowKeys()
     if (event.key !== prevKey && event.key !== nextKey) return
-    if (isEditableTarget(event.target) || pickerOpen() || tabsMenu()) return
+    // 必须以前缀（Ctrl+B）开头：否则会和编辑态的方向键抢
+    if (!consumePrefix()) return
     event.preventDefault()
     const delta: 1 | -1 = event.key === nextKey ? 1 : -1
     // 带 Shift：按项目分组跳（相邻项目的第一个标签）；不带 Shift：组内线性切换
@@ -421,10 +454,11 @@ export default function Titlebar() {
   /**
    * closeTab
    * 参数：tab 要关闭的标签
-   * 核心流程：从标签列表移除；若关闭的是当前路由会话，
-   *           跳转到相邻标签，没有相邻标签则回工作区首页
+   * 核心流程：从标签列表移除并丢弃它的完成通知（标签都没了，气泡与角标没意义）；
+   *           若关闭的是当前路由会话，跳转到相邻标签，没有相邻标签则回工作区首页
    */
   function closeTab(tab: ActiveSession) {
+    dismissNotification(tab.id)
     const closingActiveRoute = currentSessionId() === tab.id
     if (!closingActiveRoute) {
       closeSessionTab(tab.id)
@@ -665,6 +699,10 @@ export default function Titlebar() {
             </svg>
           </Show>
           <span class="min-w-0 flex-1 truncate text-[12px]">{props.tab.title || "Untitled"}</span>
+          {/* 已完成未看：跑完但从没打开过这个会话，气泡会超时消失，角标要一直在 */}
+          <Show when={!isSessionRunning(props.tab.id) && isSessionUnread(props.tab.id)}>
+            <span class="mr-0.5 size-1.5 shrink-0 rounded-full bg-accent" role="status" aria-label="Unread completion" />
+          </Show>
         </button>
         <button
           type="button"
@@ -991,6 +1029,18 @@ export default function Titlebar() {
       </div>
 
       <div class="flex shrink-0 items-center gap-1">
+        {/* 前缀待命提示：Ctrl+B 之后告诉用户能按哪两个方向键，2 秒后自动消失 */}
+        <Show when={prefixActive()}>
+          <span
+            role="status"
+            aria-label="Prefix active, press arrow key to switch tabs"
+            class="flex shrink-0 items-center gap-1 rounded-[6px] border border-edge bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+          >
+            <kbd class="font-sans text-accent">Ctrl+B</kbd>
+            <span aria-hidden="true">→</span>
+            <kbd class="font-sans text-text">{vertical() ? "↑/↓" : "←/→"}</kbd>
+          </span>
+        </Show>
         {/* 标签栏布局：横向/纵向切换，选择持久化到 localStorage */}
         <button
           type="button"
