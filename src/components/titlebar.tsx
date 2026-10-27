@@ -8,15 +8,13 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { listSessions, type Session } from "../lib/sessions"
-import { createWorkspace } from "../lib/workspaces"
-import { recalledYolo, rememberWorkspace, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
+import { selectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
   closeSessionTab,
   ensureSessionTab,
   openSessions,
   reorderSessionTabs,
-  retargetSessionTabs,
   setActiveSession,
   tabsOrientation,
   toggleTabsOrientation,
@@ -24,7 +22,7 @@ import {
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
 import { isSessionRunning } from "../lib/run-status"
-import { newSession, sessionUrl } from "../lib/session-actions"
+import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-actions"
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
 import NewSessionDialog from "./new-session-dialog"
@@ -208,29 +206,6 @@ export default function Titlebar() {
     vertical()
     queueMicrotask(updateScrollState)
   })
-
-  /**
-   * ensureLiveWorkspace
-   * 参数：path 项目路径；fallbackId 标签里记录的 workspace id
-   * 核心流程：当前选中的工作区路径一致时直接复用；
-   *           否则按路径重建/幂等获取工作区，并批量刷新同路径标签的 id
-   */
-  async function ensureLiveWorkspace(path: string | undefined, fallbackId: string | undefined): Promise<string | undefined> {
-    const current = selectedWorkspace()
-    if (path && current?.path === path) return current.id
-    if (path) {
-      try {
-        const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
-        rememberWorkspace(ws)
-        setSelectedWorkspace(ws)
-        retargetSessionTabs(path, ws.id)
-        return ws.id
-      } catch {
-        // 路径已不可用：退回标签记录的 id，由会话页给出具体错误
-      }
-    }
-    return fallbackId
-  }
 
   /**
    * togglePicker

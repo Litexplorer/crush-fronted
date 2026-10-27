@@ -47,6 +47,29 @@ async function rebuildWorkspace(path: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * ensureLiveWorkspace
+ * 参数：path 项目路径；fallbackId 标签里记录的 workspace id
+ * 核心流程：当前选中的工作区路径一致时直接复用；
+ *           否则按路径重建/幂等获取工作区，并批量刷新同路径标签的 id
+ */
+export async function ensureLiveWorkspace(path: string | undefined, fallbackId: string | undefined): Promise<string | undefined> {
+  const current = selectedWorkspace()
+  if (path && current?.path === path) return current.id
+  if (path) {
+    try {
+      const ws = await createWorkspace({ path, yolo: recalledYolo(path) })
+      rememberWorkspace(ws)
+      setSelectedWorkspace(ws)
+      retargetSessionTabs(path, ws.id)
+      return ws.id
+    } catch {
+      // 路径已不可用：退回标签记录的 id，由会话页给出具体错误
+    }
+  }
+  return fallbackId
+}
+
 /** 从抛出的错误对象中安全取 message（与首页 toast 保持一致） */
 function errorMessage(err: unknown): string {
   const e = err as { message?: string }

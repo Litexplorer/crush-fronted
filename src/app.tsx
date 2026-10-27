@@ -8,6 +8,7 @@
  */
 import { type ParentProps } from "solid-js"
 import Titlebar from "./components/titlebar"
+import NotificationCenter from "./components/notification-center"
 import { tabsOrientation } from "./lib/ui-store"
 
 export default function App(props: ParentProps) {
@@ -27,6 +28,8 @@ export default function App(props: ParentProps) {
       >
         {props.children}
       </main>
+      {/* 会话完成通知：右下角气泡，独立于页面内容，避免切页丢失 */}
+      <NotificationCenter />
     </div>
   )
 }
