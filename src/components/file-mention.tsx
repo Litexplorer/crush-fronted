@@ -3,10 +3,11 @@
  * 参数：wsId workspace ID；onPick 选中文件回调；onClose 关闭回调
  * 核心流程：Composer 的 @ 文件选择浮层 ——
  *           打开时加载根目录 → 键盘/鼠标选中行 → 文件或文件夹作为附件回调；
- *           目录可下钻（→ / 点击主行）、回退（← / Backspace）、顶部输入框按名称过滤
+ *           目录可下钻（→ / 点击主行）、回退（← / Backspace）、顶部输入框按相关度搜索
  */
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { listWorkspaceFiles, type FileEntry } from "../lib/files"
+import { rankPathMatches } from "../lib/match-score"
 import type { ApiError } from "../lib/http"
 
 /**
@@ -94,12 +95,17 @@ export default function FileMention(props: {
     return [{ name: "workspace", path: "" }, ...parts.map((p, i) => ({ name: p, path: parts.slice(0, i + 1).join("/") }))]
   }
 
-  /** 过滤后条目：无查询时目录优先、路径升序；有查询时同时匹配名称与相对路径 */
+  /**
+   * visible
+   * 核心流程：空查询保持「目录优先 + 路径升序」的浏览顺序（下钻习惯不变）；
+   *           有查询时交给 rankPathMatches 按匹配形态相关度排序，不命中的直接剔除
+   */
   const visible = () => {
-    const q = query().trim().toLowerCase()
-    return [...entries()]
-      .filter((e) => !q || e.name.toLowerCase().includes(q) || e.path.toLowerCase().includes(q))
-      .sort((a, b) => (a.is_dir === b.is_dir ? a.path.localeCompare(b.path) : a.is_dir ? -1 : 1))
+    const q = query().trim()
+    if (!q) {
+      return [...entries()].sort((a, b) => (a.is_dir === b.is_dir ? a.path.localeCompare(b.path) : a.is_dir ? -1 : 1))
+    }
+    return rankPathMatches(entries(), q)
   }
 
   /** 键盘可选行：第 0 行固定为「附加当前目录」，其后是过滤后的条目（只渲染上限内） */
