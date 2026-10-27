@@ -207,16 +207,33 @@ marked.use({
   ],
 })
 
+/** 围栏语言标注里的起始行后缀：```go:98 或 ```go#L98（区间写法 -114 只取起始行） */
+const FENCE_START_RULE = /^(.*?)(?:#l|:)(\d+)(?:-\d+)?$/
+
+/**
+ * parseFenceLang
+ * 参数：lang 代码块围栏的 info 字符串，如 go:98
+ * 核心流程：拆出语言与起始行号；带行号时返回 startLine，用于渲染独立的行号列
+ */
+function parseFenceLang(lang: string | undefined): { language: string; startLine?: number } {
+  const info = (lang ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? ""
+  const match = info.match(FENCE_START_RULE)
+  if (!match) return { language: info }
+  const startLine = Number(match[2])
+  return { language: match[1], startLine: startLine > 0 ? startLine : undefined }
+}
+
 /**
  * renderer.code / renderer.paragraph 覆盖
  * 参数：{ text 代码内容或段落原文, lang 语言标注 }
  * 核心流程：显式 callchain/tree 或无语言的树形代码块 → 折叠树；
- *           其余代码块有已注册语言则 highlight.js 高亮，否则转义原样输出
+ *           其余代码块有已注册语言则 highlight.js 高亮，否则转义原样输出；
+ *           标注起始行时额外输出 select-none 的行号列，复制只取代码正文
  */
 marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code): string {
-      const language = (lang ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? ""
+      const { language, startLine } = parseFenceLang(lang)
       if (language === "mermaid") return renderMermaidPlaceholder(text)
       if (language === "markmap" || language === "mindmap") return renderMarkmapPlaceholder(text)
       const plainLanguage = !language || language === "text" || language === "plaintext"
@@ -231,7 +248,14 @@ marked.use({
       const langClass = language ? ` language-${language}` : ""
       const langAttr = language ? ` data-lang="${language}"` : ""
       // 外层 div 只负责定位复制按钮：代码块本身的折叠样式与按钮仍作用在 pre 上
-      return `<div class="md-code-wrap" data-code-wrap><pre class="md-code"${langAttr}><code class="hljs${langClass}">${body}</code></pre><button type="button" class="md-code-copy" data-code-copy="1" aria-label="Copy code" title="Copy code">Copy</button></div>`
+      const copyButton = '<button type="button" class="md-code-copy" data-code-copy="1" aria-label="Copy code" title="Copy code">Copy</button>'
+      if (startLine === undefined) {
+        return `<div class="md-code-wrap" data-code-wrap><pre class="md-code"${langAttr}><code class="hljs${langClass}">${body}</code></pre>${copyButton}</div>`
+      }
+      // 行号列独立成列（aria-hidden + CSS user-select:none），复制代码时不会带上行号
+      const lineCount = text.split("\n").length
+      const gutter = Array.from({ length: lineCount }, (_, index) => startLine + index).join("\n")
+      return `<div class="md-code-wrap" data-code-wrap><pre class="md-code md-code-numbered"${langAttr} data-start="${startLine}"><span class="md-code-gutter" aria-hidden="true">${gutter}</span><code class="hljs${langClass}">${body}</code></pre>${copyButton}</div>`
     },
     paragraph({ text, tokens }: Tokens.Paragraph): string {
       // 未包在代码块里的纯文本调用链同样支持折叠

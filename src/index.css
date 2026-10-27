@@ -266,6 +266,32 @@ body {
   color: var(--text-base);
 }
 
+/* 带行号的代码块：行号列独立渲染且不可选中，复制只取代码正文 */
+.md-body .md-code.md-code-numbered {
+  display: flex;
+  align-items: flex-start;
+  padding-left: 0;
+}
+
+.md-body .md-code-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  margin-right: 10px;
+  padding: 0 8px 0 12px;
+  border-right: 1px solid var(--border-base);
+  background: var(--bg-deep);
+  color: var(--text-faint);
+  text-align: right;
+  font-family: var(--md-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* 调用链折叠树（call-chain.ts 生成 details/summary） */
 .md-body .call-chain {
   margin: 0.55em 0;
