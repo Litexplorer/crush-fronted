@@ -746,6 +746,44 @@ svg.markmap-svg.markmap {
   color: var(--text-base);
 }
 
+/* 代码块一键复制：外层只负责定位，按钮在悬停/键盘聚焦时出现 */
+.md-body .md-code-wrap {
+  position: relative;
+  margin: 0.55em 0;
+}
+
+.md-body .md-code-wrap .md-code {
+  margin: 0;
+}
+
+.md-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: var(--bg-deep);
+  color: var(--text-faint);
+  font-family: var(--md-font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease;
+}
+
+.md-code-wrap:hover .md-code-copy,
+.md-code-copy:focus-visible {
+  opacity: 1;
+}
+
+.md-code-copy:hover {
+  color: var(--text-base);
+}
+
 /* 代码高亮配色（highlight.js token class），dark 为基准，light 下覆盖 */
 :root {
   --md-font-mono:

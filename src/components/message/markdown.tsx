@@ -11,6 +11,7 @@ import { Marked, type Tokens } from "marked"
 import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/common"
 import katex from "katex"
+import { copyText } from "../../lib/clipboard"
 import { looksLikeCallChain, renderCallChainHtml } from "../../lib/call-chain"
 import { renderMarkmap } from "../../lib/markmap"
 import { renderMermaid } from "../../lib/mermaid"
@@ -229,7 +230,8 @@ marked.use({
           : escapeHtml(text)
       const langClass = language ? ` language-${language}` : ""
       const langAttr = language ? ` data-lang="${language}"` : ""
-      return `<pre class="md-code"${langAttr}><code class="hljs${langClass}">${body}</code></pre>`
+      // 外层 div 只负责定位复制按钮：代码块本身的折叠样式与按钮仍作用在 pre 上
+      return `<div class="md-code-wrap" data-code-wrap><pre class="md-code"${langAttr}><code class="hljs${langClass}">${body}</code></pre><button type="button" class="md-code-copy" data-code-copy="1" aria-label="Copy code" title="Copy code">Copy</button></div>`
     },
     paragraph({ text, tokens }: Tokens.Paragraph): string {
       // 未包在代码块里的纯文本调用链同样支持折叠
@@ -274,6 +276,21 @@ export function renderMarkdown(text: string): string {
  */
 function handleMarkdownClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null
+
+  const copyButton = target?.closest<HTMLElement>("[data-code-copy]")
+  if (copyButton) {
+    const pre = copyButton.closest<HTMLElement>("[data-code-wrap]")?.querySelector("pre.md-code")
+    if (!pre) return
+    // 折叠只影响显示高度，textContent 仍是完整代码
+    void copyText(pre.textContent ?? "").then((ok) => {
+      if (!ok) return
+      copyButton.textContent = "Copied"
+      window.setTimeout(() => {
+        copyButton.textContent = "Copy"
+      }, 1500)
+    })
+    return
+  }
 
   const codeToggle = target?.closest<HTMLElement>("[data-code-toggle]")
   if (codeToggle) {
