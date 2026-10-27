@@ -6,6 +6,7 @@
  *           当前打开的会话（标题栏标签页展示用）
  */
 import { createSignal } from "solid-js"
+import { cancelPrefix } from "./key-prefix"
 import { DEFAULT_THEME, isTheme, type Theme } from "./themes"
 
 export type { Theme } from "./themes"
@@ -319,4 +320,30 @@ export function setTabsOrientation(next: TabsOrientation) {
  */
 export function toggleTabsOrientation() {
   setTabsOrientation(tabsOrientation() === "vertical" ? "horizontal" : "vertical")
+}
+
+/** 命令面板开关：App 负责渲染，标签栏据此让出方向键与 Ctrl+K */
+const [commandPaletteOpen, setCommandPaletteOpen] = createSignal(false)
+
+export { commandPaletteOpen }
+
+/**
+ * toggleCommandPalette
+ * 参数：无
+ * 核心流程：Ctrl+K 开关面板；打开时取消前缀待命，避免残留的方向键状态
+ */
+export function toggleCommandPalette() {
+  setCommandPaletteOpen((open) => {
+    if (!open) cancelPrefix()
+    return !open
+  })
+}
+
+/**
+ * closeCommandPalette
+ * 参数：无
+ * 核心流程：面板内执行动作或按 Esc 后关闭
+ */
+export function closeCommandPalette() {
+  setCommandPaletteOpen(false)
 }
