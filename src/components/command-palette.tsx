@@ -12,6 +12,7 @@ import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-acti
 import {
   ensureSessionTab,
   openHistoryDialog,
+  openQuestionDialog,
   openSessions,
   openShortcutHelp,
   openTabSwitcher,
@@ -120,6 +121,14 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
         hint: "按更新时间列出本项目全部会话",
         tag: "视图",
         run: () => openHistoryDialog(),
+      },
+      {
+        id: "action:session-questions",
+        kind: "action",
+        label: "显示本会话提问",
+        hint: "前缀 + Q：可搜索，Enter 跳转",
+        tag: "视图",
+        run: () => openQuestionDialog(),
       },
       {
         id: "action:new-session",

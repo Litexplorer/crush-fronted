@@ -354,8 +354,10 @@ const [tabSwitcherOpen, setTabSwitcherOpen] = createSignal(false)
 const [shortcutHelpOpen, setShortcutHelpOpen] = createSignal(false)
 /** 历史会话浮层（命令面板入口）：独立窗口，不占命令面板的列表 */
 const [historyDialogOpen, setHistoryDialogOpen] = createSignal(false)
+/** 本会话问题浮层（前缀 + Q）：读会话页发布的问句索引 */
+const [questionDialogOpen, setQuestionDialogOpen] = createSignal(false)
 
-export { historyDialogOpen, shortcutHelpOpen, tabSwitcherOpen }
+export { historyDialogOpen, questionDialogOpen, shortcutHelpOpen, tabSwitcherOpen }
 
 /**
  * openTabSwitcher / closeTabSwitcher
@@ -400,11 +402,25 @@ export function closeHistoryDialog() {
 }
 
 /**
+ * openQuestionDialog / closeQuestionDialog
+ * 参数：无
+ * 核心流程：前缀 + Q 打开「本会话问题」浮层；打开时取消前缀待命
+ */
+export function openQuestionDialog() {
+  cancelPrefix()
+  setQuestionDialogOpen(true)
+}
+
+export function closeQuestionDialog() {
+  setQuestionDialogOpen(false)
+}
+
+/**
  * runtimeOverlayOpen
  * 参数：无
  * 核心流程：判断是否有挡在页面上的全局浮层（命令面板 / 标签列表 / 快捷键说明 / 历史会话）——
  *           这些浮层自己用方向键与字母键，标签栏快捷键必须让位
  */
 export function runtimeOverlayOpen(): boolean {
-  return commandPaletteOpen() || tabSwitcherOpen() || shortcutHelpOpen() || historyDialogOpen()
+  return commandPaletteOpen() || tabSwitcherOpen() || shortcutHelpOpen() || historyDialogOpen() || questionDialogOpen()
 }

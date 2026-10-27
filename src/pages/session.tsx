@@ -32,6 +32,12 @@ import QuestionDock from "../components/question-dock"
 import SessionPanel from "../components/session-panel"
 import TodoDock from "../components/todo-dock"
 import type { QuestionItem } from "../components/panel-questions"
+import {
+  clearSessionQuestions,
+  consumeQuestionJump,
+  publishSessionQuestions,
+  questionJumpRequest,
+} from "../lib/session-questions"
 import { ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
 import VirtualTimeline from "../components/message/virtual-timeline"
 import { recalledWorkspacePath, recalledYolo, rememberWorkspace, rememberYolo, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
@@ -1629,6 +1635,29 @@ export default function Session() {
 
   // 问句 id 集合：滚动高亮时用来判断某条 user 消息是否在索引里
   const questionIds = createMemo(() => new Set(questions().map((item) => item.messageId)))
+
+  // 问答索引同步到全局：前缀 + Q 的浮层直接读这份数据，不再重复拉消息
+  createEffect(
+    on(
+      () => questions(),
+      (list) => publishSessionQuestions(params.sessionId, list),
+    ),
+  )
+
+  // 离开会话页：清掉索引，避免浮层展示上一个会话的问句
+  onCleanup(() => clearSessionQuestions(params.sessionId))
+
+  // 浮层点名跳转：只处理当前会话的请求，消费后滚动到对应消息并高亮
+  createEffect(
+    on(
+      () => questionJumpRequest(),
+      (request) => {
+        if (!request || request.sessionId !== params.sessionId) return
+        consumeQuestionJump()
+        jumpToMessage(request.messageId)
+      },
+    ),
+  )
 
   /** 滚动高亮的帧句柄：同一帧内的多次滚动事件只做一次可见行查询 */
 

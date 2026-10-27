@@ -6,16 +6,10 @@
  *           当前条目用 accent 淡背景标记，空会话展示占位文案。
  */
 import { createEffect, For, Show } from "solid-js"
+import type { SessionQuestion } from "../lib/session-questions"
 
-/** 问答索引条目：由 session.tsx 从 user 消息派生 */
-export interface QuestionItem {
-  messageId: string
-  order: number
-  text: string
-  preview: string
-  createdAt: number
-  answered: boolean
-}
+/** 问答索引条目：结构定义在 lib/session-questions，会话页、右侧索引与全局浮层共用 */
+export type QuestionItem = SessionQuestion
 
 /**
  * formatTime
