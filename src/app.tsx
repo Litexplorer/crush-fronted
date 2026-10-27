@@ -5,7 +5,7 @@
  *           横向标签栏：Titlebar（36px）+ 主内容区上下排列；
  *           纵向标签栏：改为「左侧标签栏 + 右侧（顶栏 + 内容）」的网格布局；
  *           两种布局共用同一个 Titlebar 实例，避免标签状态分裂；
- *           额外挂几个全局浮层：右下角完成通知、Ctrl+K 命令面板、标签列表、历史会话、本会话提问、快捷键说明
+ *           额外挂几个全局浮层：右下角完成通知、Ctrl+K 命令面板、标签列表、历史会话、本会话提问、模型列表、快捷键说明
  */
 import { onCleanup, onMount, type ParentProps } from "solid-js"
 import Titlebar from "./components/titlebar"
@@ -14,6 +14,7 @@ import CommandPalette from "./components/command-palette"
 import TabSwitcher from "./components/tab-switcher"
 import HistoryDialog from "./components/history-dialog"
 import QuestionDialog from "./components/question-dialog"
+import ModelDialog from "./components/model-dialog"
 import ShortcutHelp from "./components/shortcut-help"
 import { closeCommandPalette, commandPaletteOpen, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
 
@@ -60,6 +61,8 @@ export default function App(props: ParentProps) {
       <TabSwitcher />
       <HistoryDialog />
       <QuestionDialog />
+      {/* 模型列表：前缀 + M，可搜索切换当前工作区模型 */}
+      <ModelDialog />
       <ShortcutHelp />
     </div>
   )

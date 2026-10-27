@@ -4,7 +4,9 @@
  *           listProviders      GET  /workspaces/{id}/providers → []catwalk.Provider（全量模型目录）
  *           getWorkspaceConfig GET  /workspaces/{id}/config   → config.Config（读 models.large 当前选择）
  *           setModel           POST /workspaces/{id}/config/model（scope 固定 workspace、model_type 固定 large）
+ *           另有两个展示辅助：mergeProviders 合并目录与自定义 provider、modelRevision 广播模型变更
  */
+import { createSignal } from "solid-js"
 import { httpGet, httpPost } from "./http"
 
 /** 对应 catwalk.Model（下拉展示 + 用量占比所需字段） */
@@ -95,4 +97,35 @@ export async function setModel(wsId: string, input: SetModelInput): Promise<void
       ...(input.think !== undefined ? { think: input.think } : {}),
     },
   })
+}
+
+/**
+ * mergeProviders
+ * 参数：catalog 后端 provider 目录；configured 工作区配置里的自定义 provider（数组或按 id 索引的表）
+ * 核心流程：以 id 归并 —— 目录项在前，配置里的同名 provider 覆盖它（本地接入的 provider 可能不在目录里），
+ *           让 Composer 下拉与前缀 + M 浮层共用同一份目录
+ */
+export function mergeProviders(
+  catalog: Provider[],
+  configured?: Provider[] | Record<string, Provider>,
+): Provider[] {
+  const map = new Map<string, Provider>()
+  for (const provider of catalog) map.set(provider.id, provider)
+  for (const provider of Object.values(configured ?? {})) {
+    map.set(provider.id, { id: provider.id, name: provider.name || provider.id, models: provider.models ?? [] })
+  }
+  return [...map.values()]
+}
+
+/**
+ * 模型变更版本号
+ * 核心流程：任何入口（Composer 下拉、前缀 + M 浮层）切换成功后自增，
+ *           其他展示点订阅它重拉 config，避免两处显示的模型不一致
+ */
+const [modelRevision, setModelRevision] = createSignal(0)
+
+export { modelRevision }
+
+export function bumpModelRevision() {
+  setModelRevision((prev) => prev + 1)
 }

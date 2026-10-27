@@ -13,6 +13,7 @@ import {
   activeSession,
   closeSessionTab,
   ensureSessionTab,
+  openModelDialog,
   openQuestionDialog,
   openSessions,
   openShortcutHelp,
@@ -381,7 +382,7 @@ export default function Titlebar() {
    * handlePrefixShortcut
    * 参数：event 全局键盘事件
    * 核心流程：Ctrl/Cmd+B 进入「前缀待命」（输入框里同样生效，先 preventDefault 挡掉加粗等默认行为）；
-   *           待命期间按 N 新建会话、G 打开标签列表、Q 看本会话提问、? 看快捷键、按本轴方向键切换标签，
+   *           待命期间按 N 新建会话、G 打开标签列表、Q 看本会话提问、M 切模型、? 看快捷键、按本轴方向键切换标签，
    *           其余按键（含另一根轴的方向键）立即退出待命
    */
   function handlePrefixShortcut(event: KeyboardEvent) {
@@ -418,6 +419,13 @@ export default function Titlebar() {
       event.preventDefault()
       consumePrefix()
       openQuestionDialog()
+      return
+    }
+    // 前缀 + M：列出当前工作区的全部模型并切换
+    if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "m") {
+      event.preventDefault()
+      consumePrefix()
+      openModelDialog()
       return
     }
     // 前缀 + ?：快捷键说明（Shift+/ 与 ? 都接受）
@@ -1054,6 +1062,9 @@ export default function Titlebar() {
             <span class="text-faint" aria-hidden="true">·</span>
             <kbd class="font-sans text-text">Q</kbd>
             <span class="text-faint">提问</span>
+            <span class="text-faint" aria-hidden="true">·</span>
+            <kbd class="font-sans text-text">M</kbd>
+            <span class="text-faint">模型</span>
             <span class="text-faint" aria-hidden="true">·</span>
             <kbd class="font-sans text-text">?</kbd>
           </span>

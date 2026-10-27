@@ -12,6 +12,7 @@ import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-acti
 import {
   ensureSessionTab,
   openHistoryDialog,
+  openModelDialog,
   openQuestionDialog,
   openSessions,
   openShortcutHelp,
@@ -129,6 +130,14 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
         hint: "前缀 + Q：可搜索，Enter 跳转",
         tag: "视图",
         run: () => openQuestionDialog(),
+      },
+      {
+        id: "action:model-list",
+        kind: "action",
+        label: "切换模型",
+        hint: "前缀 + M：列出当前工作区全部模型，可搜索",
+        tag: "动作",
+        run: () => openModelDialog(),
       },
       {
         id: "action:new-session",

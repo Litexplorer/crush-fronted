@@ -356,8 +356,10 @@ const [shortcutHelpOpen, setShortcutHelpOpen] = createSignal(false)
 const [historyDialogOpen, setHistoryDialogOpen] = createSignal(false)
 /** 本会话问题浮层（前缀 + Q）：读会话页发布的问句索引 */
 const [questionDialogOpen, setQuestionDialogOpen] = createSignal(false)
+/** 模型列表浮层（前缀 + M）：列出当前工作区的全部模型并切换 */
+const [modelDialogOpen, setModelDialogOpen] = createSignal(false)
 
-export { historyDialogOpen, questionDialogOpen, shortcutHelpOpen, tabSwitcherOpen }
+export { historyDialogOpen, modelDialogOpen, questionDialogOpen, shortcutHelpOpen, tabSwitcherOpen }
 
 /**
  * openTabSwitcher / closeTabSwitcher
@@ -416,11 +418,32 @@ export function closeQuestionDialog() {
 }
 
 /**
+ * openModelDialog / closeModelDialog
+ * 参数：无
+ * 核心流程：前缀 + M 打开模型列表浮层；打开时取消前缀待命，关闭由 Esc、选中或点遮罩触发
+ */
+export function openModelDialog() {
+  cancelPrefix()
+  setModelDialogOpen(true)
+}
+
+export function closeModelDialog() {
+  setModelDialogOpen(false)
+}
+
+/**
  * runtimeOverlayOpen
  * 参数：无
- * 核心流程：判断是否有挡在页面上的全局浮层（命令面板 / 标签列表 / 快捷键说明 / 历史会话）——
+ * 核心流程：判断是否有挡在页面上的全局浮层（命令面板 / 标签列表 / 快捷键说明 / 历史会话 / 模型列表）——
  *           这些浮层自己用方向键与字母键，标签栏快捷键必须让位
  */
 export function runtimeOverlayOpen(): boolean {
-  return commandPaletteOpen() || tabSwitcherOpen() || shortcutHelpOpen() || historyDialogOpen() || questionDialogOpen()
+  return (
+    commandPaletteOpen() ||
+    tabSwitcherOpen() ||
+    shortcutHelpOpen() ||
+    historyDialogOpen() ||
+    questionDialogOpen() ||
+    modelDialogOpen()
+  )
 }

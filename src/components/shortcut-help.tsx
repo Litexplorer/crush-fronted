@@ -28,6 +28,7 @@ const SECTIONS: ShortcutSection[] = [
       { keys: ["前缀", "N"], description: "新建会话（追加标签）" },
       { keys: ["前缀", "G"], description: "列出已打开标签（可搜索）" },
       { keys: ["前缀", "Q"], description: "列出本会话提问（可搜索，Enter 跳转）" },
+      { keys: ["前缀", "M"], description: "列出模型并切换（可搜索）" },
       { keys: ["前缀", "?"], description: "显示本说明" },
       { keys: ["Ctrl", "K"], description: "命令面板：搜索会话与动作" },
       { keys: ["Ctrl", "Shift", "N"], description: "新建会话并覆盖当前标签" },

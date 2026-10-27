@@ -9,8 +9,11 @@
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import {
+  bumpModelRevision,
   getWorkspaceConfig,
   listProviders,
+  mergeProviders,
+  modelRevision,
   setModel,
   type Provider,
   type SelectedModel,
@@ -139,14 +142,7 @@ export default function ModelSelect(props: {
    * 核心流程：合并 catwalk 目录与 workspace config 中的自定义 provider（同 id 以配置为准），
    *           保证本地接入的 provider（如 huya-copilot）也能出现在下拉里
    */
-  const allProviders = createMemo<Provider[]>(() => {
-    const map = new Map<string, Provider>()
-    for (const p of providers()) map.set(p.id, p)
-    for (const p of configProviders()) {
-      map.set(p.id, { id: p.id, name: p.name || p.id, models: p.models ?? [] })
-    }
-    return [...map.values()]
-  })
+  const allProviders = createMemo<Provider[]>(() => mergeProviders(providers(), configProviders()))
 
   /**
    * recentModels
@@ -308,6 +304,8 @@ export default function ModelSelect(props: {
     setOpen(false)
     setConfigError(false)
     emitModel(next)
+    // 广播模型变更：其他入口（前缀 + M 浮层）据此刷新自己的列表
+    bumpModelRevision()
     setPending(true)
     try {
       await setModel(wsId, {
@@ -345,6 +343,14 @@ export default function ModelSelect(props: {
         void load(true)
       },
     ),
+  )
+
+  // 其他入口切换模型后（前缀 + M 浮层）重新拉 config，保证按钮显示与用量指示同步
+  createEffect(
+    on(modelRevision, () => {
+      if (!props.wsId) return
+      void load(true)
+    }),
   )
 
   // 下拉打开期间监听外部点击 / Escape，点击组件外或按 Esc 收起
