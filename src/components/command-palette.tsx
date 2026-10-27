@@ -2,15 +2,22 @@
  * command-palette.tsx
  * 参数：open 是否显示；onClose 关闭回调
  * 核心流程：Ctrl+K 全局面板 ——
- *           数据来源三路：已打开的标签（跨项目）、当前工作区的历史会话（打开时懒加载）、
- *           固定动作（新建会话 / 切换标签布局 / 回首页）；
+ *           数据来源两路：已打开的标签（跨项目）、固定动作（历史会话 / 新建会话 / 标签列表 /
+ *           快捷键说明 / 布局 / 回首页）；历史会话单独一个浮层，不挤占首屏；
  *           输入按子序列模糊过滤，↑↓ 选择、Enter 执行、Esc 或点击外部关闭
  */
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
-import { listSessions, type Session } from "../lib/sessions"
 import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-actions"
-import { ensureSessionTab, openSessions, toggleTabsOrientation, type ActiveSession } from "../lib/ui-store"
+import {
+  ensureSessionTab,
+  openHistoryDialog,
+  openSessions,
+  openShortcutHelp,
+  openTabSwitcher,
+  toggleTabsOrientation,
+  type ActiveSession,
+} from "../lib/ui-store"
 import { selectedWorkspace } from "../lib/workspace-store"
 import { isSessionRunning } from "../lib/run-status"
 
@@ -49,28 +56,14 @@ function fuzzyScore(label: string, query: string): number | undefined {
   return score
 }
 
-/**
- * describeSession
- * 参数：session 服务端会话
- * 核心流程：会话列表没有稳定可读的副标题，退而展示消息条数，帮助区分同名会话
- */
-function describeSession(session: Session): string {
-  const count = session.message_count ?? 0
-  return count > 0 ? `${count} 条消息` : "空会话"
-}
-
 export default function CommandPalette(props: { open: boolean; onClose: () => void }) {
   const location = useLocation()
   const navigate = useNavigate()
   const [query, setQuery] = createSignal("")
   const [activeIndex, setActiveIndex] = createSignal(0)
   const [notice, setNotice] = createSignal("")
-  const [sessions, setSessions] = createSignal<Session[]>([])
-  const [loadingSessions, setLoadingSessions] = createSignal(false)
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
-  /** 防止旧请求覆盖新结果：每次加载自增 */
-  let loadToken = 0
 
   // 当前工作区：优先取路由参数，其次取已选中的工作区（首页场景）
   const workspaceId = createMemo(() => {
@@ -78,27 +71,6 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
     if (match) return decodeURIComponent(match[1])
     return selectedWorkspace()?.id
   })
-
-  /**
-   * loadWorkspaceSessions
-   * 参数：wsId 工作区 ID
-   * 核心流程：拉取该工作区全部会话；丢弃过期响应；失败只记录提示，不影响标签与动作可用
-   */
-  async function loadWorkspaceSessions(wsId: string) {
-    const token = ++loadToken
-    setLoadingSessions(true)
-    try {
-      const list = await listSessions(wsId)
-      if (token !== loadToken) return
-      setSessions(list)
-    } catch (err) {
-      if (token !== loadToken) return
-      setSessions([])
-      setNotice(err instanceof Error ? err.message : "会话列表加载失败")
-    } finally {
-      if (token === loadToken) setLoadingSessions(false)
-    }
-  }
 
   /**
    * openSession
@@ -112,28 +84,6 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
     navigate(sessionUrl(target))
   }
 
-  /**
-   * createSessionItem
-   * 参数：session 服务端会话；wsId 所属工作区；projectPath 项目路径
-   * 核心流程：把历史会话包成面板条目，点击后按普通标签打开
-   */
-  function createSessionItem(session: Session, wsId: string, projectPath: string | undefined): PaletteItem {
-    return {
-      id: `session:${session.id}`,
-      kind: "session",
-      label: session.title || "Untitled",
-      hint: describeSession(session),
-      tag: session.is_busy ? "运行中" : "历史",
-      run: () =>
-        openSession({
-          id: session.id,
-          title: session.title || "Untitled",
-          workspaceId: wsId,
-          projectPath,
-        }),
-    }
-  }
-
   // 打开时重置输入与高亮，并把焦点交给搜索框（不自动聚焦的话键盘操作要再一次点击）
   createEffect(() => {
     if (!props.open) return
@@ -143,25 +93,15 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
     queueMicrotask(() => inputRef?.focus())
   })
 
-  // 打开时懒加载当前工作区的历史会话
-  createEffect(() => {
-    if (!props.open) return
-    const wsId = workspaceId()
-    if (!wsId) return
-    void loadWorkspaceSessions(wsId)
-  })
-
   /**
    * items
    * 参数：无
-   * 核心流程：标签（跨项目，优先）→ 当前工作区里尚未打开的会话 → 固定动作；
+   * 核心流程：标签（跨项目，优先）→（可选）当前工作区历史会话 → 固定动作；
    *           再按输入过滤并保持原有顺序
    */
   const items = createMemo<PaletteItem[]>(() => {
     const tabs = openSessions()
-    const tabIds = new Set(tabs.map((tab) => tab.id))
     const wsId = workspaceId()
-    const projectPath = tabs.find((tab) => tab.workspaceId === wsId)?.projectPath ?? selectedWorkspace()?.path
 
     const tabItems: PaletteItem[] = tabs.map((tab) => ({
       id: `session:${tab.id}`,
@@ -172,26 +112,44 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
       run: () => openSession(tab),
     }))
 
-    const historyItems: PaletteItem[] =
-      wsId === undefined
-        ? []
-        : sessions()
-            .filter((session) => !tabIds.has(session.id))
-            .map((session) => createSessionItem(session, wsId, projectPath))
-
     const actionItems: PaletteItem[] = [
+      {
+        id: "action:session-history",
+        kind: "action",
+        label: "显示历史会话",
+        hint: "按更新时间列出本项目全部会话",
+        tag: "视图",
+        run: () => openHistoryDialog(),
+      },
       {
         id: "action:new-session",
         kind: "action",
         label: "新建会话",
-        hint: "Ctrl+Shift+N 覆盖当前标签",
+        hint: "Ctrl+B 后按 N 同效",
         tag: "动作",
         run: async () => {
           const ws = selectedWorkspace()
-          const result = await newSession({ workspaceId: ws?.id ?? wsId, projectPath: ws?.path ?? projectPath })
+          const path = ws?.path ?? openSessions().find((tab) => tab.workspaceId === wsId)?.projectPath
+          const result = await newSession({ workspaceId: ws?.id ?? wsId, projectPath: path })
           if (!result.ok) throw new Error(result.error)
           navigate(sessionUrl(result.tab))
         },
+      },
+      {
+        id: "action:tab-switcher",
+        kind: "action",
+        label: "显示标签列表",
+        hint: "前缀 + G：按项目分组，可搜索",
+        tag: "视图",
+        run: () => openTabSwitcher(),
+      },
+      {
+        id: "action:shortcut-help",
+        kind: "action",
+        label: "快捷键说明",
+        hint: "前缀 + ?",
+        tag: "视图",
+        run: () => openShortcutHelp(),
       },
       {
         id: "action:toggle-tabs-orientation",
@@ -211,7 +169,7 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
       },
     ]
 
-    const all = [...tabItems, ...historyItems, ...actionItems]
+    const all = [...tabItems, ...actionItems]
     const needle = query().trim()
     if (!needle) return all
     return all
@@ -345,9 +303,7 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
               )}
             </For>
             <Show when={items().length === 0}>
-              <p class="px-3 py-6 text-center text-[12px] text-faint">
-                {loadingSessions() ? "加载会话中…" : "没有匹配项"}
-              </p>
+              <p class="px-3 py-6 text-center text-[12px] text-faint">没有匹配项</p>
             </Show>
           </div>
           <div class="flex shrink-0 items-center justify-between border-t border-edge px-3 py-1.5 text-[10px] text-faint">

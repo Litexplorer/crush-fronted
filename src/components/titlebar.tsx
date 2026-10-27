@@ -12,16 +12,19 @@ import { selectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
   closeSessionTab,
-  commandPaletteOpen,
   ensureSessionTab,
+  openShortcutHelp,
   openSessions,
+  openTabSwitcher,
   reorderSessionTabs,
+  runtimeOverlayOpen,
   setActiveSession,
   tabsOrientation,
   toggleTabsOrientation,
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
+import { groupSessionTabs, type SessionTabGroup } from "../lib/session-groups"
 import { isSessionRunning } from "../lib/run-status"
 import { dismissNotification, isSessionUnread } from "../lib/notifications"
 import { armPrefix, cancelPrefix, consumePrefix, prefixActive } from "../lib/key-prefix"
@@ -32,23 +35,8 @@ import NewSessionDialog from "./new-session-dialog"
 
 type ConnectionState = "connected" | "disconnected"
 
-/** 标签分组：同一项目（projectPath）下的会话标签归为一组 */
-interface TabGroup {
-  key: string
-  label: string
-  solid?: string
-  tabs: ActiveSession[]
-}
-
-/**
- * projectLabel
- * 参数：key 分组键（项目绝对路径，缺失时为 workspace id）
- * 核心流程：取路径最后一段作为项目名，取不到时回退原值
- */
-function projectLabel(key: string): string {
-  const parts = key.replace(/\/+$/, "").split("/").filter(Boolean)
-  return parts[parts.length - 1] || key
-}
+/** 标签分组：同一项目（projectPath）下的会话标签归为一组，分组逻辑见 lib/session-groups */
+type TabGroup = SessionTabGroup
 
 
 /**
@@ -106,19 +94,7 @@ export default function Titlebar() {
    * 核心流程：按项目把标签分组（按首次出现顺序），组键用 projectPath ——
    *           workspace id 是服务端内存态，重启后会变
    */
-  const tabGroups = createMemo<TabGroup[]>(() => {
-    const groups = new Map<string, TabGroup>()
-    for (const tab of openSessions()) {
-      const key = tab.projectPath || tab.workspaceId
-      const existing = groups.get(key)
-      if (existing) {
-        existing.tabs.push(tab)
-        continue
-      }
-      groups.set(key, { key, label: projectLabel(key), solid: tabColor(tab)?.solid, tabs: [tab] })
-    }
-    return [...groups.values()]
-  })
+  const tabGroups = createMemo<TabGroup[]>(() => groupSessionTabs(openSessions()))
 
   /**
    * visibleTabs
@@ -404,12 +380,13 @@ export default function Titlebar() {
    * handlePrefixShortcut
    * 参数：event 全局键盘事件
    * 核心流程：Ctrl/Cmd+B 进入「前缀待命」（输入框里同样生效，先 preventDefault 挡掉加粗等默认行为）；
-   *           待命期间本轴方向键留给标签切换，其余按键（含另一根轴的方向键）立即退出待命
+   *           待命期间按 N 新建会话、G 打开标签列表、? 看快捷键、按本轴方向键切换标签，
+   *           其余按键（含另一根轴的方向键）立即退出待命
    */
   function handlePrefixShortcut(event: KeyboardEvent) {
     if (event.isComposing) return
-    // 面板打开时不接管：它的输入框自己处理按键
-    if (commandPaletteOpen()) {
+    // 浮层打开时不接管：它们自己处理按键（命令面板输入框、标签列表的上下选择）
+    if (runtimeOverlayOpen()) {
       if (prefixActive()) cancelPrefix()
       return
     }
@@ -421,6 +398,27 @@ export default function Titlebar() {
     if (!prefixActive()) return
     // 只按修饰键不算「别的键」：待命要留到方向键按下
     if (event.key === "Control" || event.key === "Shift" || event.key === "Alt" || event.key === "Meta") return
+    // 前缀 + N：新建会话（追加标签，替换当前标签仍走 Ctrl+Shift+N）
+    if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+      event.preventDefault()
+      consumePrefix()
+      void handleNewSession(false)
+      return
+    }
+    // 前缀 + G：按项目分组列出已打开的标签，可搜索
+    if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "g") {
+      event.preventDefault()
+      consumePrefix()
+      openTabSwitcher()
+      return
+    }
+    // 前缀 + ?：快捷键说明（Shift+/ 与 ? 都接受）
+    if (event.key === "?" || (event.shiftKey && event.key === "/")) {
+      event.preventDefault()
+      consumePrefix()
+      openShortcutHelp()
+      return
+    }
     const [prevKey, nextKey] = tabArrowKeys()
     // 本轴方向键不再需要 Ctrl：直接交给 handleTabShortcut 消费
     if (event.key === prevKey || event.key === nextKey) return
@@ -436,7 +434,7 @@ export default function Titlebar() {
   function handleTabShortcut(event: KeyboardEvent) {
     if (event.isComposing) return
     if (event.altKey) return
-    if (pickerOpen() || tabsMenu() || commandPaletteOpen()) return
+    if (pickerOpen() || tabsMenu() || runtimeOverlayOpen()) return
     const [prevKey, nextKey] = tabArrowKeys()
     if (event.key !== prevKey && event.key !== nextKey) return
     // 必须以前缀（Ctrl+B）开头：否则会和编辑态的方向键抢
@@ -1029,16 +1027,19 @@ export default function Titlebar() {
       </div>
 
       <div class="flex shrink-0 items-center gap-1">
-        {/* 前缀待命提示：Ctrl+B 之后告诉用户能按哪两个方向键，2 秒后自动消失 */}
+        {/* 前缀待命提示：Ctrl+B 之后告诉用户能按哪些键（方向键切标签、N 新建），2 秒后自动消失 */}
         <Show when={prefixActive()}>
           <span
             role="status"
-            aria-label="Prefix active, press arrow key to switch tabs"
+            aria-label="Prefix active, press arrow key to switch tabs or N to create a session"
             class="flex shrink-0 items-center gap-1 rounded-[6px] border border-edge bg-raised px-1.5 py-0.5 text-[10px] text-muted"
           >
             <kbd class="font-sans text-accent">Ctrl+B</kbd>
             <span aria-hidden="true">→</span>
             <kbd class="font-sans text-text">{vertical() ? "↑/↓" : "←/→"}</kbd>
+            <span class="text-faint" aria-hidden="true">·</span>
+            <kbd class="font-sans text-text">N</kbd>
+            <span class="text-faint">新建</span>
           </span>
         </Show>
         {/* 标签栏布局：横向/纵向切换，选择持久化到 localStorage */}

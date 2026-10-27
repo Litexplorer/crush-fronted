@@ -347,3 +347,64 @@ export function toggleCommandPalette() {
 export function closeCommandPalette() {
   setCommandPaletteOpen(false)
 }
+
+/** 标签列表浮层（前缀 + G）：按项目分组展示已打开的标签 */
+const [tabSwitcherOpen, setTabSwitcherOpen] = createSignal(false)
+/** 快捷键说明浮层（前缀 + ?） */
+const [shortcutHelpOpen, setShortcutHelpOpen] = createSignal(false)
+/** 历史会话浮层（命令面板入口）：独立窗口，不占命令面板的列表 */
+const [historyDialogOpen, setHistoryDialogOpen] = createSignal(false)
+
+export { historyDialogOpen, shortcutHelpOpen, tabSwitcherOpen }
+
+/**
+ * openTabSwitcher / closeTabSwitcher
+ * 参数：无
+ * 核心流程：前缀 + G 打开列表；打开时取消前缀待命，关闭由 Esc、选中或点遮罩触发
+ */
+export function openTabSwitcher() {
+  cancelPrefix()
+  setTabSwitcherOpen(true)
+}
+
+export function closeTabSwitcher() {
+  setTabSwitcherOpen(false)
+}
+
+/**
+ * openShortcutHelp / closeShortcutHelp
+ * 参数：无
+ * 核心流程：前缀 + ? 打开快捷键说明；同样取消前缀待命
+ */
+export function openShortcutHelp() {
+  cancelPrefix()
+  setShortcutHelpOpen(true)
+}
+
+export function closeShortcutHelp() {
+  setShortcutHelpOpen(false)
+}
+
+/**
+ * openHistoryDialog / closeHistoryDialog
+ * 参数：无
+ * 核心流程：从命令面板打开「历史会话」独立浮层；打开时取消前缀待命
+ */
+export function openHistoryDialog() {
+  cancelPrefix()
+  setHistoryDialogOpen(true)
+}
+
+export function closeHistoryDialog() {
+  setHistoryDialogOpen(false)
+}
+
+/**
+ * runtimeOverlayOpen
+ * 参数：无
+ * 核心流程：判断是否有挡在页面上的全局浮层（命令面板 / 标签列表 / 快捷键说明 / 历史会话）——
+ *           这些浮层自己用方向键与字母键，标签栏快捷键必须让位
+ */
+export function runtimeOverlayOpen(): boolean {
+  return commandPaletteOpen() || tabSwitcherOpen() || shortcutHelpOpen() || historyDialogOpen()
+}
