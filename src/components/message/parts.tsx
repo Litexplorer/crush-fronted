@@ -455,7 +455,16 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               if (index() !== props.message.parts.length - 1) return null
               const f = data as FinishPartData
               if (!f.reason) return null
-              return <FinishLine reason={f.reason} generationMs={f.generation_ms} outputTokens={f.output_tokens} />
+              // 完成时间优先用 finish 分片自带的时间，旧消息缺省时回退消息时间戳
+              const finishedAt = f.time || props.message.updated_at || props.message.created_at
+              return (
+                <FinishLine
+                  reason={f.reason}
+                  generationMs={f.generation_ms}
+                  outputTokens={f.output_tokens}
+                  completedAt={finishedAt}
+                />
+              )
             }
             default:
               return null
@@ -660,13 +669,28 @@ function ShellCommandCard(props: { command: string; output: string }) {
 }
 
 /**
- * FinishLine
- * 参数：reason 结束原因；generationMs 服务端吐字耗时；outputTokens 本回合输出 token
- * 核心流程：底部一行小字展示结果文案；有记账时追加耗时（秒，一位小数）与 tok/s
+ * formatDateTime
+ * 参数：seconds Unix 秒
+ * 核心流程：转为本地时区的 YYYY-MM-DD HH:mm:ss；非正数返回空串（旧消息缺时间戳时不显示）
  */
-function FinishLine(props: { reason: string; generationMs?: number; outputTokens?: number }) {
+function formatDateTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return ""
+  const date = new Date(seconds * 1000)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
+ * FinishLine
+ * 参数：reason 结束原因；generationMs 服务端吐字耗时；outputTokens 本回合输出 token；
+ *       completedAt 完成时间（Unix 秒）
+ * 核心流程：底部一行小字展示结果文案；有记账时追加耗时（秒，一位小数）与 tok/s；
+ *           有完成时间时最末追加本地时间，便于回看“这轮是什么时候结束的”
+ */
+function FinishLine(props: { reason: string; generationMs?: number; outputTokens?: number; completedAt?: number }) {
   const seconds = typeof props.generationMs === "number" && props.generationMs > 0 ? (props.generationMs / 1000).toFixed(1) : ""
   const rate = tokenRate(props.outputTokens, props.generationMs)
+  const finishedAt = formatDateTime(props.completedAt ?? 0)
   return (
     <div class="mt-0.5 text-[11px] text-faint">
       · {finishLabel(props.reason)}
@@ -675,6 +699,9 @@ function FinishLine(props: { reason: string; generationMs?: number; outputTokens
       </Show>
       <Show when={rate !== undefined}>
         <span> · {Math.round(rate ?? 0)} tok/s</span>
+      </Show>
+      <Show when={finishedAt}>
+        <span title="完成时间"> · {finishedAt}</span>
       </Show>
     </div>
   )
