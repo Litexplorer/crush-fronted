@@ -7,6 +7,7 @@
  *           挂载后异步把 Mermaid 占位渲染成 SVG（流式期间只展示源码）
  */
 import { createEffect, createMemo, on, onCleanup } from "solid-js"
+import { render } from "solid-js/web"
 import { Marked, type Tokens } from "marked"
 import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/common"
@@ -16,7 +17,9 @@ import { looksLikeCallChain, renderCallChainHtml } from "../../lib/call-chain"
 import { renderEcharts } from "../../lib/echarts"
 import { renderLad } from "../../lib/lad"
 import { renderMarkmap } from "../../lib/markmap"
+import { classifyMedia } from "../../lib/media-kind"
 import { renderMermaid } from "../../lib/mermaid"
+import MediaCard from "./media-card"
 import { theme, type Theme } from "../../lib/ui-store"
 
 /** 独立 marked 实例：GFM 表格/列表/删除线 + 单换行转 <br>，贴近聊天场景 */
@@ -37,6 +40,19 @@ function escapeHtml(text: string): string {
 
 /** 显式标记为调用链/树的代码块语言 */
 const CALL_CHAIN_LANGS = new Set(["callchain", "call-chain", "callstack", "chain", "tree"])
+
+/** 独立成段的链接：整段只有一条 http(s) URL 时升级成多媒体卡片 */
+const STANDALONE_URL_RULE = /^(https?:\/\/[^\s<>"']+)$/i
+
+/**
+ * renderMediaPlaceholder
+ * 参数：url 待预览的 URL
+ * 核心流程：输出空占位节点并把 URL 编码进 data 属性；卡片由挂载后的
+ *           mountMediaCards 用 Solid 渲染进去（HTML 字符串里塞不进组件）
+ */
+function renderMediaPlaceholder(url: string): string {
+  return `<div class="media-card-slot" data-media-url="${encodeURIComponent(url)}"></div>`
+}
 
 /** 显式标记为 ECharts 图表的代码块语言 */
 const ECHARTS_LANGS = new Set(["echarts", "echart", "chart"])
@@ -284,6 +300,9 @@ marked.use({
       return `<div class="md-code-wrap" data-code-wrap><pre class="md-code md-code-numbered"${langAttr} data-start="${startLine}"><span class="md-code-gutter" aria-hidden="true">${gutter}</span><code class="hljs${langClass}">${body}</code></pre>${copyButton}</div>`
     },
     paragraph({ text, tokens }: Tokens.Paragraph): string {
+      // 整段就是一条 URL：交给多媒体卡片，免得只剩一行死链
+      const standalone = STANDALONE_URL_RULE.exec(text.trim())
+      if (standalone && classifyMedia(standalone[1])) return renderMediaPlaceholder(standalone[1])
       // 未包在代码块里的纯文本调用链同样支持折叠
       if (looksLikeCallChain(text)) {
         const html = renderCallChainHtml(text)
@@ -513,6 +532,7 @@ function renderMathBlocks(root: HTMLElement) {
  * 参数：props.text 文本；props.class 附加样式；props.streaming 是否仍在流式输出
  * 核心流程：createMemo 缓存解析结果并注入 md-body；
  *           挂载后同步渲染 KaTeX 公式、按序把 Mermaid / Markmap / ECharts / 梯形图占位渲染成图形（流式期间仅展示源码）；
+ *           正文里独立成段的 URL 渲染成多媒体卡片（音频/视频/图片/链接）；
  *           事件委托处理调用链展开/折叠与 Mermaid 源码切换
  */
 export function MarkdownText(props: { text: string; class?: string; streaming?: boolean }) {
@@ -523,6 +543,8 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   const markmapCleanups = new Set<() => void>()
   /** 当前挂载的 ECharts 销毁函数：同上，需断开 ResizeObserver 并 dispose 画布 */
   const echartsCleanups = new Set<() => void>()
+  /** 当前挂载的多媒体卡片卸载函数：innerHTML 重写后旧卡片必须显式卸载 */
+  const mediaCleanups = new Set<() => void>()
 
   /**
    * destroyMarkmaps
@@ -540,6 +562,38 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   function destroyEcharts() {
     echartsCleanups.forEach((dispose) => dispose())
     echartsCleanups.clear()
+  }
+
+  /**
+   * destroyMediaCards
+   * 核心流程：逐个卸载已渲染的多媒体卡片并清空集合；重写 innerHTML 后旧节点会变成孤儿
+   */
+  function destroyMediaCards() {
+    mediaCleanups.forEach((dispose) => dispose())
+    mediaCleanups.clear()
+  }
+
+  /**
+   * mountMediaCards
+   * 参数：root Markdown 根节点
+   * 核心流程：先卸载上一轮卡片，再把每个 data-media-url 占位渲染成 MediaCard；
+   *           URL 解码或分类失败时保留空占位，不影响正文
+   */
+  function mountMediaCards(root: HTMLElement) {
+    destroyMediaCards()
+    root.querySelectorAll<HTMLElement>("[data-media-url]").forEach((slot) => {
+      const encoded = slot.dataset.mediaUrl
+      if (!encoded) return
+      let url = ""
+      try {
+        url = decodeURIComponent(encoded)
+      } catch {
+        return
+      }
+      const source = classifyMedia(url)
+      if (!source) return
+      mediaCleanups.add(render(() => <MediaCard source={source} />, slot))
+    })
   }
 
   /**
@@ -725,7 +779,12 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
           resetLadBlocks(root)
           renderMathBlocks(root)
           applyCodeClamps(root, streaming)
-          if (streaming) return
+          // 流式期间不挂播放器：每个分片都重建 DOM，反复挂载会打断正在播放的媒体
+          if (streaming) {
+            destroyMediaCards()
+            return
+          }
+          mountMediaCards(root)
           void renderMermaidBlocks(root, seq, currentTheme)
           void renderMarkmapBlocks(root, seq, currentTheme)
           void renderEchartsBlocks(root, seq, currentTheme)
@@ -739,6 +798,7 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
     renderSeq++
     destroyMarkmaps()
     destroyEcharts()
+    destroyMediaCards()
   })
 
   return (

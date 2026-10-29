@@ -814,6 +814,102 @@ svg.markmap-svg.markmap {
   font-size: 10px;
 }
 
+/* 多媒体卡片：正文里独立成段的 URL（音频 / 视频 / 图片 / 链接） */
+.md-body .media-card {
+  margin: 0.55em 0;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.md-body .media-card-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: color-mix(in srgb, var(--text-base) 2%, transparent);
+}
+
+.md-body .media-card-kind {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.md-body .media-card-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-base);
+}
+
+.md-body .media-card-meta,
+.md-body .media-card-host {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.md-body .media-card-open {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.md-body .media-card-open:hover {
+  background: var(--bg-raised);
+  color: var(--text-base);
+}
+
+.md-body .media-card-body {
+  padding: 8px 10px;
+}
+
+.md-body .media-card-image {
+  display: flex;
+  justify-content: center;
+}
+
+.md-body .media-card-audio {
+  display: block;
+  width: 100%;
+}
+
+/* 视频不锁高度：媒体元素自带宽高比，锁死会在窄栏里拉伸变形 */
+.md-body .media-card-video {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  border-radius: 6px;
+  background: #000;
+}
+
+.md-body .media-card-hint {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* 流式期间占位保持空节点（不占高度），结束后由 mountMediaCards 填充 */
+.md-body .media-card-slot:empty {
+  display: none;
+}
+
 /* 梯形图（LAD）：容器与工具栏沿用 Mermaid 的视觉 */
 .md-body .lad-block {
   margin: 0.55em 0;
