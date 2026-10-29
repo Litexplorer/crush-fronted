@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" style="background-color: var(--bg-deep, #080808)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ECharts smoke</title>
+    <script>
+      try {
+        var saved = localStorage.getItem("crush.theme")
+        if (saved && /^[a-z0-9-]+$/.test(saved)) document.documentElement.dataset.theme = saved
+      } catch (err) {}
+    </script>
+  </head>
+  <body style="margin:0">
+    <pre id="report" style="position:fixed;right:0;top:0;width:420px;max-height:100vh;overflow:auto;font-size:10px;margin:0;background:#0008;color:#0f0;z-index:9"></pre>
+    <div id="root" style="margin-right:430px"></div>
+    <script type="module" src="/src/smoke-echarts.tsx"></script>
+  </body>
+</html>

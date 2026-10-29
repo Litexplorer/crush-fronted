@@ -708,6 +708,112 @@ svg.markmap-svg.markmap {
   font-size: 10px;
 }
 
+/* ECharts 图表：容器与工具栏沿用 Mermaid 的视觉 */
+.md-body .echarts-block {
+  margin: 0.55em 0;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.md-body .echarts-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: color-mix(in srgb, var(--text-base) 2%, transparent);
+}
+
+.md-body .echarts-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.md-body .echarts-bar button {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.md-body .echarts-bar button:hover {
+  background: var(--bg-raised);
+  color: var(--text-base);
+}
+
+.md-body .echarts-source {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--md-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-base);
+  white-space: pre;
+}
+
+.md-body .echarts-source code {
+  font: inherit;
+}
+
+/* 固定高度且不加内边距：ECharts 按客户区尺寸初始化画布，内边距会让画布溢出边框 */
+.md-body .echarts-diagram {
+  height: 340px;
+}
+
+.md-body .echarts-diagram svg {
+  display: block;
+}
+
+/* 源码态与出错态只展示源码，避免未渲染的空画布占位 */
+.md-body .echarts-block[data-state="source"] .echarts-diagram,
+.md-body .echarts-block[data-state="error"] .echarts-diagram {
+  display: none;
+}
+
+.md-body .echarts-block[data-state="rendering"] .echarts-source {
+  display: none;
+}
+
+.md-body .echarts-block[data-state="ready"] .echarts-source {
+  display: none;
+}
+
+.md-body .echarts-block[data-state="ready"][data-view="source"] .echarts-source {
+  display: block;
+}
+
+.md-body .echarts-block[data-state="ready"][data-view="source"] .echarts-diagram {
+  display: none;
+}
+
+.md-body .echarts-block:not([data-state="ready"]) .echarts-bar button {
+  display: none;
+}
+
+.md-body .echarts-block[data-state="rendering"] .echarts-bar::after {
+  content: "Rendering…";
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.md-body .echarts-block[data-state="error"] .echarts-bar::after {
+  content: "ECharts option error";
+  margin-left: auto;
+  color: #e5484d;
+  font-size: 10px;
+}
+
 /* 梯形图（LAD）：容器与工具栏沿用 Mermaid 的视觉 */
 .md-body .lad-block {
   margin: 0.55em 0;

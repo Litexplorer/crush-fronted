@@ -2,7 +2,7 @@
  * markdown.tsx
  * 参数：MarkdownText { text 待渲染文本, class 附加样式类, streaming 是否仍在流式输出 }
  * 核心流程：marked（GFM + 换行）解析 → 自定义 renderer 用 highlight.js 高亮代码块 →
- *           调用链代码块/段落转 details 折叠树 → Mermaid / Markmap / 梯形图（LAD）代码块转为待渲染占位 →
+ *           调用链代码块/段落转 details 折叠树 → Mermaid / Markmap / ECharts / 梯形图（LAD）代码块转为待渲染占位 →
  *           DOMPurify 清洗（禁 style；链接统一 target=_blank + rel=noopener）→ innerHTML 输出 →
  *           挂载后异步把 Mermaid 占位渲染成 SVG（流式期间只展示源码）
  */
@@ -13,6 +13,7 @@ import hljs from "highlight.js/lib/common"
 import katex from "katex"
 import { copyText } from "../../lib/clipboard"
 import { looksLikeCallChain, renderCallChainHtml } from "../../lib/call-chain"
+import { renderEcharts } from "../../lib/echarts"
 import { renderLad } from "../../lib/lad"
 import { renderMarkmap } from "../../lib/markmap"
 import { renderMermaid } from "../../lib/mermaid"
@@ -37,6 +38,9 @@ function escapeHtml(text: string): string {
 /** 显式标记为调用链/树的代码块语言 */
 const CALL_CHAIN_LANGS = new Set(["callchain", "call-chain", "callstack", "chain", "tree"])
 
+/** 显式标记为 ECharts 图表的代码块语言 */
+const ECHARTS_LANGS = new Set(["echarts", "echart", "chart"])
+
 /**
  * renderMermaidPlaceholder
  * 参数：text Mermaid 源码
@@ -44,6 +48,16 @@ const CALL_CHAIN_LANGS = new Set(["callchain", "call-chain", "callstack", "chain
  */
 function renderMermaidPlaceholder(text: string): string {
   return `<div class="mermaid-block" data-mermaid data-state="source" data-view="diagram"><div class="mermaid-bar"><span class="mermaid-label">Mermaid</span><button type="button" data-mermaid-action="source">Source</button></div><pre class="mermaid-source"><code class="language-mermaid">${escapeHtml(text)}</code></pre><div class="mermaid-diagram" role="img" aria-label="Mermaid diagram"></div></div>`
+}
+
+/**
+ * renderEchartsPlaceholder
+ * 参数：text ECharts option（JSON）
+ * 核心流程：输出源码区 + 空图表容器；图表由 ECharts 在清洗后接管，
+ *           容器高度由 CSS 固定，保证 init 时能量到真实尺寸
+ */
+function renderEchartsPlaceholder(text: string): string {
+  return `<div class="echarts-block" data-echarts data-state="source" data-view="diagram"><div class="echarts-bar"><span class="echarts-label">ECharts</span><button type="button" data-echarts-action="source">Source</button></div><pre class="echarts-source"><code class="language-json">${escapeHtml(text)}</code></pre><div class="echarts-diagram" role="img" aria-label="ECharts chart"></div></div>`
 }
 
 /**
@@ -247,6 +261,7 @@ marked.use({
       if (language === "mermaid") return renderMermaidPlaceholder(text)
       if (language === "lad" || language === "ladder") return renderLadPlaceholder(text)
       if (language === "markmap" || language === "mindmap") return renderMarkmapPlaceholder(text)
+      if (ECHARTS_LANGS.has(language)) return renderEchartsPlaceholder(text)
       const plainLanguage = !language || language === "text" || language === "plaintext"
       if (CALL_CHAIN_LANGS.has(language) || (plainLanguage && looksLikeCallChain(text))) {
         const html = renderCallChainHtml(text)
@@ -371,6 +386,16 @@ function handleMarkdownClick(e: MouseEvent) {
     return
   }
 
+  const echartsAction = target?.closest<HTMLElement>("[data-echarts-action]")
+  if (echartsAction) {
+    const block = echartsAction.closest<HTMLElement>("[data-echarts]")
+    if (!block || block.dataset.state !== "ready") return
+    const showingSource = block.dataset.view === "source"
+    block.dataset.view = showingSource ? "diagram" : "source"
+    echartsAction.textContent = showingSource ? "Source" : "Diagram"
+    return
+  }
+
   const action = target?.closest<HTMLElement>("[data-callchain-action]")
   if (!action) return
   const root = action.closest<HTMLElement>("[data-callchain]")
@@ -487,7 +512,7 @@ function renderMathBlocks(root: HTMLElement) {
  * MarkdownText
  * 参数：props.text 文本；props.class 附加样式；props.streaming 是否仍在流式输出
  * 核心流程：createMemo 缓存解析结果并注入 md-body；
- *           挂载后同步渲染 KaTeX 公式、按序把 Mermaid / Markmap / 梯形图占位渲染成图形（流式期间仅展示源码）；
+ *           挂载后同步渲染 KaTeX 公式、按序把 Mermaid / Markmap / ECharts / 梯形图占位渲染成图形（流式期间仅展示源码）；
  *           事件委托处理调用链展开/折叠与 Mermaid 源码切换
  */
 export function MarkdownText(props: { text: string; class?: string; streaming?: boolean }) {
@@ -496,6 +521,8 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   let renderSeq = 0
   /** 当前挂载的 Markmap 销毁函数：文本或主题变化时统一释放 */
   const markmapCleanups = new Set<() => void>()
+  /** 当前挂载的 ECharts 销毁函数：同上，需断开 ResizeObserver 并 dispose 画布 */
+  const echartsCleanups = new Set<() => void>()
 
   /**
    * destroyMarkmaps
@@ -504,6 +531,15 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   function destroyMarkmaps() {
     markmapCleanups.forEach((dispose) => dispose())
     markmapCleanups.clear()
+  }
+
+  /**
+   * destroyEcharts
+   * 核心流程：逐个调用销毁函数，清空集合；ECharts 实例持有 ResizeObserver 与画布，必须显式释放
+   */
+  function destroyEcharts() {
+    echartsCleanups.forEach((dispose) => dispose())
+    echartsCleanups.clear()
   }
 
   /**
@@ -519,6 +555,23 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
       const toggle = block.querySelector<HTMLButtonElement>("[data-markmap-action]")
       if (toggle) toggle.textContent = "Source"
       const diagram = block.querySelector<HTMLElement>(".markmap-diagram")
+      if (diagram) diagram.replaceChildren()
+    })
+  }
+
+  /**
+   * resetEchartsBlocks
+   * 参数：root Markdown 根节点
+   * 核心流程：先 dispose 旧实例，再把每个块恢复源码态与按钮文案，清空图表容器
+   */
+  function resetEchartsBlocks(root: HTMLElement) {
+    destroyEcharts()
+    root.querySelectorAll<HTMLElement>("[data-echarts]").forEach((block) => {
+      block.dataset.state = "source"
+      block.dataset.view = "diagram"
+      const toggle = block.querySelector<HTMLButtonElement>("[data-echarts-action]")
+      if (toggle) toggle.textContent = "Source"
+      const diagram = block.querySelector<HTMLElement>(".echarts-diagram")
       if (diagram) diagram.replaceChildren()
     })
   }
@@ -621,6 +674,39 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
     }
   }
 
+  /**
+   * renderEchartsBlocks
+   * 参数：root 容器；seq 本次渲染序号；currentTheme 当前主题
+   * 核心流程：串行把每个占位交给 ECharts，成功后标记 ready；
+   *           序号失效时先销毁刚建好的实例，避免过期画布与监听残留
+   */
+  async function renderEchartsBlocks(root: HTMLElement, seq: number, currentTheme: Theme) {
+    const blocks = [...root.querySelectorAll<HTMLElement>("[data-echarts]")]
+    for (const block of blocks) {
+      if (seq !== renderSeq || !block.isConnected) return
+      const source = block.querySelector<HTMLElement>(".echarts-source code")?.textContent ?? ""
+      const diagram = block.querySelector<HTMLElement>(".echarts-diagram")
+      if (!source.trim() || !diagram) {
+        block.dataset.state = "error"
+        continue
+      }
+
+      block.dataset.state = "rendering"
+      try {
+        const dispose = await renderEcharts(diagram, source, currentTheme)
+        if (seq !== renderSeq || !block.isConnected) {
+          dispose()
+          return
+        }
+        echartsCleanups.add(dispose)
+        block.dataset.state = "ready"
+      } catch {
+        if (seq !== renderSeq) return
+        block.dataset.state = "error"
+      }
+    }
+  }
+
   createEffect(
     on(
       [html, () => props.streaming === true, theme],
@@ -635,12 +721,14 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
           if (seq !== renderSeq || !root.isConnected) return
           resetMermaidBlocks(root)
           resetMarkmapBlocks(root)
+          resetEchartsBlocks(root)
           resetLadBlocks(root)
           renderMathBlocks(root)
           applyCodeClamps(root, streaming)
           if (streaming) return
           void renderMermaidBlocks(root, seq, currentTheme)
           void renderMarkmapBlocks(root, seq, currentTheme)
+          void renderEchartsBlocks(root, seq, currentTheme)
           void renderLadBlocks(root, seq, currentTheme)
         })
       },
@@ -650,6 +738,7 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
   onCleanup(() => {
     renderSeq++
     destroyMarkmaps()
+    destroyEcharts()
   })
 
   return (
