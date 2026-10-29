@@ -20,6 +20,15 @@ npm install
 npm run dev          # 默认 http://localhost:8070
 ```
 
+常驻后台运行（脱离终端与父进程，父进程退出不影响）：
+
+```bash
+./start-frontend.sh start      # 监听 0.0.0.0:8070，日志 /tmp/crush-frontend.log，pid /tmp/crush-frontend.pid
+./start-frontend.sh status
+./start-frontend.sh restart
+./start-frontend.sh stop
+```
+
 后端需先启动：
 
 ```bash
