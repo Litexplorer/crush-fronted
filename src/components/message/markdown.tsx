@@ -2,7 +2,7 @@
  * markdown.tsx
  * 参数：MarkdownText { text 待渲染文本, class 附加样式类, streaming 是否仍在流式输出 }
  * 核心流程：marked（GFM + 换行）解析 → 自定义 renderer 用 highlight.js 高亮代码块 →
- *           调用链代码块/段落转 details 折叠树 → Mermaid 代码块转为待渲染占位 →
+ *           调用链代码块/段落转 details 折叠树 → Mermaid / Markmap / 梯形图（LAD）代码块转为待渲染占位 →
  *           DOMPurify 清洗（禁 style；链接统一 target=_blank + rel=noopener）→ innerHTML 输出 →
  *           挂载后异步把 Mermaid 占位渲染成 SVG（流式期间只展示源码）
  */
@@ -13,6 +13,7 @@ import hljs from "highlight.js/lib/common"
 import katex from "katex"
 import { copyText } from "../../lib/clipboard"
 import { looksLikeCallChain, renderCallChainHtml } from "../../lib/call-chain"
+import { renderLad } from "../../lib/lad"
 import { renderMarkmap } from "../../lib/markmap"
 import { renderMermaid } from "../../lib/mermaid"
 import { theme, type Theme } from "../../lib/ui-store"
@@ -52,6 +53,15 @@ function renderMermaidPlaceholder(text: string): string {
  */
 function renderMarkmapPlaceholder(text: string): string {
   return `<div class="markmap-block" data-markmap data-state="source" data-view="diagram"><div class="markmap-bar"><span class="markmap-label">Mindmap</span><button type="button" data-markmap-action="source">Source</button></div><pre class="markmap-source"><code class="language-markdown">${escapeHtml(text)}</code></pre><div class="markmap-diagram"></div></div>`
+}
+
+/**
+ * renderLadPlaceholder
+ * 参数：text 梯形图 DSL 原文
+ * 核心流程：输出源码区 + 空图表容器；图表由 schematex 在清洗后接管
+ */
+function renderLadPlaceholder(text: string): string {
+  return `<div class="lad-block" data-lad data-state="source" data-view="diagram"><div class="lad-bar"><span class="lad-label">Ladder</span><button type="button" data-lad-action="source">Source</button></div><pre class="lad-source"><code class="language-lad">${escapeHtml(text)}</code></pre><div class="lad-diagram" role="img" aria-label="Ladder diagram"></div></div>`
 }
 
 /** 数学公式 token：text 为 TeX 源码，displayMode 控制行内/块级 */
@@ -235,6 +245,7 @@ marked.use({
     code({ text, lang }: Tokens.Code): string {
       const { language, startLine } = parseFenceLang(lang)
       if (language === "mermaid") return renderMermaidPlaceholder(text)
+      if (language === "lad" || language === "ladder") return renderLadPlaceholder(text)
       if (language === "markmap" || language === "mindmap") return renderMarkmapPlaceholder(text)
       const plainLanguage = !language || language === "text" || language === "plaintext"
       if (CALL_CHAIN_LANGS.has(language) || (plainLanguage && looksLikeCallChain(text))) {
@@ -340,6 +351,16 @@ function handleMarkdownClick(e: MouseEvent) {
     return
   }
 
+  const ladAction = target?.closest<HTMLElement>("[data-lad-action]")
+  if (ladAction) {
+    const block = ladAction.closest<HTMLElement>("[data-lad]")
+    if (!block || block.dataset.state !== "ready") return
+    const showingSource = block.dataset.view === "source"
+    block.dataset.view = showingSource ? "diagram" : "source"
+    ladAction.textContent = showingSource ? "Source" : "Diagram"
+    return
+  }
+
   const markmapAction = target?.closest<HTMLElement>("[data-markmap-action]")
   if (markmapAction) {
     const block = markmapAction.closest<HTMLElement>("[data-markmap]")
@@ -415,6 +436,22 @@ function resetMermaidBlocks(root: HTMLElement) {
 }
 
 /**
+ * resetLadBlocks
+ * 参数：root Markdown 根节点
+ * 核心流程：文本或主题变化后清空旧 SVG，恢复源码态与按钮文案
+ */
+function resetLadBlocks(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>("[data-lad]").forEach((block) => {
+    block.dataset.state = "source"
+    block.dataset.view = "diagram"
+    const toggle = block.querySelector<HTMLButtonElement>("[data-lad-action]")
+    if (toggle) toggle.textContent = "Source"
+    const diagram = block.querySelector<HTMLElement>(".lad-diagram")
+    if (diagram) diagram.innerHTML = ""
+  })
+}
+
+/**
  * renderMathBlocks
  * 参数：root Markdown 根节点
  * 核心流程：读取占位节点里的 TeX 源码 → KaTeX 同步渲染；
@@ -450,7 +487,7 @@ function renderMathBlocks(root: HTMLElement) {
  * MarkdownText
  * 参数：props.text 文本；props.class 附加样式；props.streaming 是否仍在流式输出
  * 核心流程：createMemo 缓存解析结果并注入 md-body；
- *           挂载后同步渲染 KaTeX 公式、按序把 Mermaid 占位渲染成 SVG（流式期间仅展示源码）；
+ *           挂载后同步渲染 KaTeX 公式、按序把 Mermaid / Markmap / 梯形图占位渲染成图形（流式期间仅展示源码）；
  *           事件委托处理调用链展开/折叠与 Mermaid 源码切换
  */
 export function MarkdownText(props: { text: string; class?: string; streaming?: boolean }) {
@@ -554,6 +591,36 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
     }
   }
 
+  /**
+   * renderLadBlocks
+   * 参数：root 容器；seq 本次渲染序号；currentTheme 当前主题
+   * 核心流程：串行把每个梯形图占位渲染成 SVG，成功后标记 ready；
+   *           语法错误标记 error 保留源码；序号变化或节点卸载时丢弃过期结果
+   */
+  async function renderLadBlocks(root: HTMLElement, seq: number, currentTheme: Theme) {
+    const blocks = [...root.querySelectorAll<HTMLElement>("[data-lad]")]
+    for (const block of blocks) {
+      if (seq !== renderSeq || !block.isConnected) return
+      const source = block.querySelector<HTMLElement>(".lad-source code")?.textContent ?? ""
+      const diagram = block.querySelector<HTMLElement>(".lad-diagram")
+      if (!source.trim() || !diagram) {
+        block.dataset.state = "error"
+        continue
+      }
+
+      block.dataset.state = "rendering"
+      try {
+        const svg = await renderLad(source, currentTheme)
+        if (seq !== renderSeq || !block.isConnected) return
+        diagram.innerHTML = svg
+        block.dataset.state = "ready"
+      } catch {
+        if (seq !== renderSeq) return
+        block.dataset.state = "error"
+      }
+    }
+  }
+
   createEffect(
     on(
       [html, () => props.streaming === true, theme],
@@ -568,11 +635,13 @@ export function MarkdownText(props: { text: string; class?: string; streaming?: 
           if (seq !== renderSeq || !root.isConnected) return
           resetMermaidBlocks(root)
           resetMarkmapBlocks(root)
+          resetLadBlocks(root)
           renderMathBlocks(root)
           applyCodeClamps(root, streaming)
           if (streaming) return
           void renderMermaidBlocks(root, seq, currentTheme)
           void renderMarkmapBlocks(root, seq, currentTheme)
+          void renderLadBlocks(root, seq, currentTheme)
         })
       },
     ),

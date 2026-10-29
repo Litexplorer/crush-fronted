@@ -21,6 +21,7 @@
     "markmap-lib": "^0.18.12",
     "markmap-view": "^0.18.12",
     "mermaid": "^12.2.0",
+    "schematex": "^1.1.4",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

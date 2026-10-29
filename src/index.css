@@ -708,6 +708,112 @@ svg.markmap-svg.markmap {
   font-size: 10px;
 }
 
+/* 梯形图（LAD）：容器与工具栏沿用 Mermaid 的视觉 */
+.md-body .lad-block {
+  margin: 0.55em 0;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.md-body .lad-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: color-mix(in srgb, var(--text-base) 2%, transparent);
+}
+
+.md-body .lad-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.md-body .lad-bar button {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.md-body .lad-bar button:hover {
+  background: var(--bg-raised);
+  color: var(--text-base);
+}
+
+.md-body .lad-source {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--md-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-base);
+  white-space: pre;
+}
+
+.md-body .lad-source code {
+  font: inherit;
+}
+
+.md-body .lad-diagram {
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.md-body .lad-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+/* 未渲染完成时只展示源码，避免空白容器 */
+.md-body .lad-block[data-state="source"] .lad-diagram,
+.md-body .lad-block[data-state="rendering"] .lad-diagram,
+.md-body .lad-block[data-state="error"] .lad-diagram {
+  display: none;
+}
+
+.md-body .lad-block[data-state="ready"] .lad-source {
+  display: none;
+}
+
+.md-body .lad-block[data-state="ready"][data-view="source"] .lad-source {
+  display: block;
+}
+
+.md-body .lad-block[data-state="ready"][data-view="source"] .lad-diagram {
+  display: none;
+}
+
+.md-body .lad-block:not([data-state="ready"]) .lad-bar button {
+  display: none;
+}
+
+.md-body .lad-block[data-state="rendering"] .lad-bar::after {
+  content: "Rendering…";
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.md-body .lad-block[data-state="error"] .lad-bar::after {
+  content: "Ladder syntax error";
+  margin-left: auto;
+  color: #e5484d;
+  font-size: 10px;
+}
+
 /* 工具输出 / shell 输出等宽块（parts.tsx）；高度由 ClampedPreview 控制 */
 .md-pre {
   margin: 0;
