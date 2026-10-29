@@ -1434,27 +1434,37 @@ export default function Session() {
 
   /**
    * onKeyIntent
-   * 参数：e 键盘事件
+   * 参数：e 键盘事件（挂在 window 捕获阶段——容器本身不可聚焦，只挂容器时按键收不到）
    * 核心流程：容器内按键滚动时按方向更新跟随 ——
    *           ↑/PageUp/Home 视为用户上翻，停用跟随；↓/PageDown/End 且已到底时恢复；
-   *           焦点落在输入控件上时不处理，避免和控件自身的按键语义冲突
+   *           焦点落在输入控件或弹窗上时不处理，避免和控件自身的按键语义冲突；
+   *           焦点掉到 body/容器外时把焦点收回时间线，否则原生滚动没有落点
    */
   function onKeyIntent(e: KeyboardEvent) {
     const el = scrollRef
     if (!el) return
     const target = e.target as HTMLElement | null
     if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return
+    if (document.querySelector("[role='dialog']")) return
     switch (e.key) {
       case "ArrowUp":
       case "PageUp":
       case "Home":
         stickToBottom = false
-        return
+        break
       case "ArrowDown":
       case "PageDown":
       case "End":
         if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) stickToBottom = true
+        break
+      default:
         return
+    }
+    // 虚拟列表会卸载焦点元素，焦点掉到 body 后浏览器找不到可滚动目标（body 为 overflow-hidden），
+    // 把焦点收回容器，让原生方向键滚动作用在时间线上
+    const active = document.activeElement
+    if (!active || active === document.body || !el.contains(active)) {
+      el.focus({ preventScroll: true })
     }
   }
 
@@ -1800,6 +1810,12 @@ export default function Session() {
     }
   }
 
+  // 方向键滚动意图：挂 window 捕获阶段，避免焦点掉到 body 或卡片被卸载后收不到按键
+  onMount(() => {
+    window.addEventListener("keydown", onKeyIntent, true)
+    onCleanup(() => window.removeEventListener("keydown", onKeyIntent, true))
+  })
+
   // 会话信息弹窗快捷键：Ctrl+Alt+I 开关（纯展示操作，输入框内同样生效）
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1930,10 +1946,10 @@ export default function Session() {
             {/* 消息时间线：可滚动区，内容最大宽 1000px 居中（对齐 opencode 2xl） */}
             <div
               ref={scrollRef}
+              tabIndex={-1}
               class="min-h-0 flex-1 overflow-y-auto"
               onScroll={handleScroll}
               onWheel={onWheelIntent}
-              onKeyDown={onKeyIntent}
               onPointerDown={onPointerDownIntent}
               onPointerUp={onPointerUpIntent}
               onPointerCancel={onPointerUpIntent}
