@@ -19,7 +19,7 @@ import { MindmapText } from "./mindmap-text"
 import SubagentCard from "./subagent-card"
 import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
-import ViewCode, { parseViewData, parseViewImage, ViewImage } from "./view-code"
+import ViewCode, { parseViewData, parseViewMedia, ViewMedia } from "./view-code"
 import ImagePreview from "./image-preview"
 import BashBody, { parseBashData } from "./bash-card"
 import McpArgs from "./mcp-card"
@@ -256,12 +256,24 @@ function SummaryMessage(props: { message: TimelineMessage }) {
 }
 
 /**
- * defaultOpenTool
- * 参数：name 工具名
- * 核心流程：edit 类卡片内容本身就是主要信息，默认展开（用户手动折叠后以 overrides 为准）
+ * isMediaResult
+ * 参数：result 工具结果分片
+ * 核心流程：mime_type 以 image/ 或 video/ 开头即视为媒体结果，这类卡片的内容就是媒体本身
  */
-function defaultOpenTool(name: string): boolean {
-  return /^(edit|multiedit)$/i.test(name)
+function isMediaResult(result: ToolResultPartData | undefined): boolean {
+  const mime = result?.mime_type ?? ""
+  return mime.startsWith("image/") || mime.startsWith("video/")
+}
+
+/**
+ * defaultOpenTool
+ * 参数：name 工具名；result 工具结果分片
+ * 核心流程：edit 类卡片内容本身就是主要信息，默认展开；
+ *           view 拿到图片/视频时同样默认展开，避免为看一眼图再点一次（用户手动折叠后以 overrides 为准）
+ */
+function defaultOpenTool(name: string, result?: ToolResultPartData): boolean {
+  if (/^(edit|multiedit)$/i.test(name)) return true
+  return /^view$/i.test(name) && isMediaResult(result)
 }
 
 /**
@@ -363,7 +375,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const key = `tool:${tc.id ?? index()}`
               // agent 卡片只在真正运行时自动展开，已完成的历史记录默认收起，避免刷屏
               const autoOpen = () => key === `tool:${runningToolId()}` && (name !== "agent" || (!tc.finished && !result))
-              const open = () => overrides()[key] ?? (autoOpen() || defaultOpenTool(name))
+              const open = () => overrides()[key] ?? (autoOpen() || defaultOpenTool(name, result))
               // 按 id 找同消息内对应 result 合并展示
               const inlineResult = props.message.parts.find((p) => {
                 if (p.type !== "tool_result") return false
@@ -410,9 +422,9 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const origin = tr.tool_call_id ? subagent?.toolCalls().get(tr.tool_call_id) : undefined
               const name = tr.name || origin?.name || "tool"
               // edit 结果已合并进调用卡片：跳过独立结果卡，避免同一操作出现两张卡片
-              if (origin && defaultOpenTool(name)) return null
+              if (origin && defaultOpenTool(name, tr)) return null
               const resultKey = `result:${index()}`
-              const resultOpen = () => overrides()[resultKey] ?? defaultOpenTool(name)
+              const resultOpen = () => overrides()[resultKey] ?? defaultOpenTool(name, tr)
               return (
                 <ToolCard
                   name={name}
@@ -551,10 +563,10 @@ function ToolCard(props: {
       ? parseEditDiff(props.inputRaw, props.result?.metadata)
       : undefined,
   )
-  // view 结果带 image/* 的 base64 时走图片卡：缩略图 + 尺寸 + 体积
-  const viewImage = createMemo(() =>
+  // view 结果带 image/* 或 video/* 的 base64 时走媒体卡：预览 + 尺寸 + 体积
+  const viewMedia = createMemo(() =>
     props.open && !hasError() && /^view$/i.test(props.name)
-      ? parseViewImage(props.inputRaw, props.result?.mime_type, props.result?.data, props.result?.metadata)
+      ? parseViewMedia(props.inputRaw, props.result?.mime_type, props.result?.data, props.result?.metadata)
       : undefined,
   )
   // view 展开时改用代码卡：文件路径 + 行号 + 高亮，metadata 缺失时回退解析 <file> 块
@@ -574,7 +586,7 @@ function ToolCard(props: {
     (!isMcp() && !!props.inputRaw) ||
     !!props.result?.content ||
     !!editDiff() ||
-    !!viewImage() ||
+    !!viewMedia() ||
     !!viewData() ||
     !!bashData()
   return (
@@ -623,7 +635,7 @@ function ToolCard(props: {
       <Show when={props.open && hasBody() && !bashData()}>
         <div class="flex flex-col gap-2 border-t border-edge px-2.5 py-2">
           <Switch>
-            <Match when={viewImage()}>{(data) => <ViewImage data={data()} />}</Match>
+            <Match when={viewMedia()}>{(data) => <ViewMedia data={data()} />}</Match>
             <Match when={viewData()}>{(data) => <ViewCode data={data()} />}</Match>
             <Match when={editDiff()}>{(diff) => <EditDiff data={diff()} />}</Match>
             <Match when={true}>

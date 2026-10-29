@@ -1,8 +1,8 @@
 /**
  * view-code.tsx
- * 参数：parseViewData / parseViewImage 解析 view 工具的 input、metadata 与 media；
- *       ViewCode 渲染代码卡，ViewImage 渲染图片卡
- * 核心流程：结果带 image/* 的 base64 时走 ViewImage（缩略图 + 尺寸 + 体积）；
+ * 参数：parseViewData / parseViewMedia 解析 view 工具的 input、metadata 与 media；
+ *       ViewCode 渲染代码卡，ViewMedia 渲染图片/视频卡
+ * 核心流程：结果带 image/* 或 video/* 的 base64 时走 ViewMedia（预览 + 尺寸 + 体积）；
  *           否则优先用 tool_result.metadata（file_path + content），缺失时回退解析
  *           result.content 里的 <file> 块（剥离行号、截断提示、诊断）；
  *           头部展示路径与行号范围，正文交给 CodeBlock（行号 + 高亮 + 折叠）
@@ -24,9 +24,11 @@ export interface ViewData {
   moreHint?: string
 }
 
-export interface ViewImageData {
+export interface ViewMediaData {
   filePath: string
-  /** 后端下发的 MIME，形如 image/png */
+  /** 媒体类型：image 走缩略图，video 走原生播放器 */
+  kind: "image" | "video"
+  /** 后端下发的 MIME，形如 image/png、video/mp4 */
   mime: string
   /** 下发字节数，由 metadata 或 base64 长度换算 */
   bytes: number
@@ -106,26 +108,39 @@ function parseImageMetadata(metadata: string | undefined): {
 }
 
 /**
- * parseViewImage
+ * mediaKind
+ * 参数：mime 后端下发的 MIME
+ * 核心流程：image/* → "image"，video/* → "video"，其余返回 undefined 交给代码卡
+ */
+function mediaKind(mime: string | undefined): "image" | "video" | undefined {
+  if (mime?.startsWith("image/")) return "image"
+  if (mime?.startsWith("video/")) return "video"
+  return undefined
+}
+
+/**
+ * parseViewMedia
  * 参数：inputRaw 工具输入 JSON；mimeType tool_result.mime_type；data tool_result.data（base64）；
  *       metadata tool_result.metadata（服务端回填的尺寸/体积）
- * 核心流程：仅当 mime 为 image/* 且带 base64 时返回图片数据——
+ * 核心流程：仅当 mime 为 image/* 或 video/* 且带 base64 时返回媒体数据——
  *           拼成 data URL 供前端直接渲染；优先用 metadata 的尺寸与体积，
  *           metadata 缺失时再由 base64 长度换算；其余情形交给 parseViewData 走代码路线
  */
-export function parseViewImage(
+export function parseViewMedia(
   inputRaw: string | undefined,
   mimeType: string | undefined,
   data: string | undefined,
   metadata?: string,
-): ViewImageData | undefined {
-  if (!mimeType?.startsWith("image/") || !data) return undefined
+): ViewMediaData | undefined {
+  const kind = mediaKind(mimeType)
+  if (!kind || !mimeType || !data) return undefined
   const input = parseToolInput(inputRaw)
   const filePath =
     typeof input.file_path === "string" ? input.file_path : typeof input.path === "string" ? input.path : ""
   const meta = parseImageMetadata(metadata)
   return {
     filePath,
+    kind,
     mime: mimeType,
     bytes: meta.bytes ?? base64Bytes(data),
     originalBytes: meta.originalBytes,
@@ -136,12 +151,13 @@ export function parseViewImage(
 }
 
 /**
- * ViewImage
- * 参数：data 解析后的图片数据
+ * ViewMedia
+ * 参数：data 解析后的媒体数据
  * 核心流程：头部路径 +「MIME · 宽×高 · 体积」，服务端缩过图时补上「原图 X」→
- *           正文缩略图，点击进全屏；尺寸优先取 metadata，缺失时由 img onLoad 回填
+ *           正文图片走缩略图（点击进全屏），视频走原生播放器；
+ *           尺寸优先取 metadata，缺失时由 img onLoad / video onLoadedMetadata 回填
  */
-export function ViewImage(props: { data: ViewImageData }) {
+export function ViewMedia(props: { data: ViewMediaData }) {
   const [size, setSize] = createSignal<{ width: number; height: number }>()
   // 头部元信息：metadata 带尺寸时立即可用，否则等解码完成补齐
   const dims = () =>
@@ -168,12 +184,30 @@ export function ViewImage(props: { data: ViewImageData }) {
         <span class="shrink-0 text-faint">{meta()}</span>
       </div>
       <div class="flex justify-center bg-base p-2">
-        <ImagePreview
-          src={props.data.src}
-          alt={props.data.filePath}
-          maxHeight={320}
-          onSize={(value) => setSize(value)}
-        />
+        <Show
+          when={props.data.kind === "video"}
+          fallback={
+            <ImagePreview
+              src={props.data.src}
+              alt={props.data.filePath}
+              maxHeight={320}
+              onSize={(value) => setSize(value)}
+            />
+          }
+        >
+          <video
+            src={props.data.src}
+            controls
+            playsinline
+            class="max-h-80 max-w-full rounded"
+            onLoadedMetadata={(e) => {
+              const video = e.currentTarget
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                setSize({ width: video.videoWidth, height: video.videoHeight })
+              }
+            }}
+          />
+        </Show>
       </div>
     </div>
   )
