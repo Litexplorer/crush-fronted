@@ -3,3 +3,6 @@ dist/
 .crush/
 *.local
 .DS_Store
+
+# 本地临时文件（如大体积媒体的软链），不入库
+.tmp/
