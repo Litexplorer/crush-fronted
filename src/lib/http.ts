@@ -10,7 +10,7 @@ export interface ApiError {
   status?: number
 }
 
-type HttpMethod = "GET" | "POST" | "DELETE"
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE"
 
 /**
  * request
@@ -51,6 +51,10 @@ export function httpGet<T>(path: string): Promise<T> {
 
 export function httpPost<T>(path: string, body: unknown): Promise<T> {
   return request<T>("POST", path, body)
+}
+
+export function httpPut<T>(path: string, body: unknown): Promise<T> {
+  return request<T>("PUT", path, body)
 }
 
 export function httpDelete<T>(path: string): Promise<T> {

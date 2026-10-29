@@ -4,9 +4,10 @@
  *           listSessions   GET  /workspaces/{id}/sessions
  *           createSession  POST /workspaces/{id}/sessions（后端只读取 title 字段）
  *           getSession     GET  /workspaces/{id}/sessions/{sid}
+ *           renameSession  PUT  /workspaces/{id}/sessions/{sid}/title
  *           listMessages   GET  /workspaces/{id}/sessions/{sid}/messages
  */
-import { httpGet, httpPost } from "./http"
+import { httpGet, httpPost, httpPut } from "./http"
 
 /** 会话 todo 条目，对应 proto.Todo */
 export interface SessionTodo {
@@ -93,6 +94,18 @@ export async function createSession(wsId: string, input: CreateSessionInput = {}
  */
 export async function getSession(wsId: string, sid: string): Promise<Session> {
   return httpGet<Session>(`/workspaces/${encodeURIComponent(wsId)}/sessions/${encodeURIComponent(sid)}`)
+}
+
+/**
+ * renameSession
+ * 参数：wsId workspace ID；sid 会话 ID；title 新标题（调用方 trim 过、非空）
+ * 核心流程：PUT /workspaces/{wsId}/sessions/{sid}/title —— 后端只更新 title，
+ *           不动用量/成本/todos；标题变更再经 SSE session 事件推给其他客户端
+ */
+export async function renameSession(wsId: string, sid: string, title: string): Promise<Session> {
+  return httpPut<Session>(`/workspaces/${encodeURIComponent(wsId)}/sessions/${encodeURIComponent(sid)}/title`, {
+    title,
+  })
 }
 
 /**

@@ -7,7 +7,7 @@
  */
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
-import { listSessions, type Session } from "../lib/sessions"
+import { listSessions, renameSession, type Session } from "../lib/sessions"
 import { selectedWorkspace } from "../lib/workspace-store"
 import {
   activeSession,
@@ -24,6 +24,7 @@ import {
   setActiveSession,
   tabsOrientation,
   toggleTabsOrientation,
+  updateSessionTab,
   type ActiveSession,
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
@@ -34,6 +35,7 @@ import { armPrefix, cancelPrefix, consumePrefix, prefixActive } from "../lib/key
 import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-actions"
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
+import { InlineTitle } from "./inline-title"
 import NewSessionDialog from "./new-session-dialog"
 
 type ConnectionState = "connected" | "disconnected"
@@ -348,6 +350,22 @@ export default function Titlebar() {
   }
 
   /**
+   * commitRename
+   * 参数：tab 目标标签；next 新标题（InlineTitle 已 trim 且与旧值不同）
+   * 核心流程：先按项目路径解析当前有效 workspace（服务端重启后 id 会变）→
+   *           PUT 标题子资源 → 同步标签栏标题；失败保持原标题并打日志
+   */
+  async function commitRename(tab: ActiveSession, next: string) {
+    const wsId = (await ensureLiveWorkspace(tab.projectPath, tab.workspaceId)) ?? tab.workspaceId
+    try {
+      const saved = await renameSession(wsId, tab.id, next)
+      updateSessionTab({ id: saved.id, title: saved.title || "Untitled", workspaceId: wsId })
+    } catch (err) {
+      console.warn(`[crush] rename session failed: ${(err as { message?: string })?.message ?? "unknown"}`)
+    }
+  }
+
+  /**
    * switchTab
    * 参数：delta 方向（1 下一个 / -1 上一个）
    * 核心流程：按标签展示顺序取相邻标签（首尾循环）→ 复用 openTab 切换；
@@ -650,10 +668,12 @@ export default function Titlebar() {
    */
   function TabItem(props: { tab: ActiveSession; vertical: boolean }) {
     const active = () => currentSessionId() === props.tab.id
+    // 标题编辑中：暂停拖拽与切标签，避免拖拽吞掉文本选择、点击打断输入
+    const [renaming, setRenaming] = createSignal(false)
     return (
       <div
         data-session-tab={props.tab.id}
-        draggable={true}
+        draggable={!renaming()}
         onDragStart={(event) => startTabDrag(event, props.tab)}
         onDragOver={(event) => overTab(event, props.tab)}
         onDragLeave={() => {
@@ -692,8 +712,7 @@ export default function Titlebar() {
           class="ml-1 h-3 w-[3px] shrink-0 rounded-full"
           style={{ "background-color": tabColor(props.tab)?.solid ?? "transparent" }}
         />
-        <button
-          type="button"
+        <div
           role="tab"
           aria-selected={active()}
           tabIndex={rovingTabId() === props.tab.id ? 0 : -1}
@@ -701,8 +720,19 @@ export default function Titlebar() {
           title={props.tab.title}
           aria-label={`Open ${props.tab.title || "Untitled"}`}
           aria-current={active() ? "page" : undefined}
-          onClick={() => void openTab(props.tab)}
-          onKeyDown={(event) => onTabKeyDown(event, props.tab.id)}
+          onClick={() => {
+            if (renaming()) return
+            void openTab(props.tab)
+          }}
+          onKeyDown={(event) => {
+            // div 没有 button 的原生回车/空格激活，这里补齐
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault()
+              void openTab(props.tab)
+              return
+            }
+            onTabKeyDown(event, props.tab.id)
+          }}
         >
           <span class="flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-accent text-[9px] font-bold leading-none text-white">
             C
@@ -721,12 +751,18 @@ export default function Titlebar() {
               <path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" stroke-linecap="round" />
             </svg>
           </Show>
-          <span class="min-w-0 flex-1 truncate text-[12px]">{props.tab.title || "Untitled"}</span>
+          <InlineTitle
+            value={props.tab.title || "Untitled"}
+            class="min-w-0 flex-1 truncate text-[12px]"
+            inputClass="min-w-0 flex-1 rounded-[4px] border border-edge bg-base px-1 text-[12px] text-text outline-none focus:border-accent"
+            onEditingChange={setRenaming}
+            onCommit={(next) => commitRename(props.tab, next)}
+          />
           {/* 已完成未看：跑完但从没打开过这个会话，气泡会超时消失，角标要一直在 */}
           <Show when={!isSessionRunning(props.tab.id) && isSessionUnread(props.tab.id)}>
             <span class="mr-0.5 size-1.5 shrink-0 rounded-full bg-accent" role="status" aria-label="Unread completion" />
           </Show>
-        </button>
+        </div>
         <button
           type="button"
           aria-label={`Close ${props.tab.title || "Untitled"}`}

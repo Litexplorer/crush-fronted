@@ -12,13 +12,14 @@
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
-import { getSession, listMessages, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
+import { getSession, listMessages, renameSession, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
 import { cancel, getAgent, initAgent, newRunId, sendMessage, setCurrentSession } from "../lib/agent"
 import { closeEvents, ensureEvents, eventsConnection, onEventsOpen, subscribeEvents, type WorkspaceEvent } from "../lib/events"
 import { setSessionRunning } from "../lib/run-status"
 import { grantPermission, getSkip, setSkip, type PermissionAction, type PermissionRequest } from "../lib/permissions"
 import { answerQuestions, cancelQuestions, type QuestionRequest, type QuestionResponse } from "../lib/questions"
 import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type ToolResultPartData } from "../components/message/parts"
+import { InlineTitle } from "../components/inline-title"
 import RunningIndicator from "../components/message/running-indicator"
 import { SubagentProvider, type SubagentStore } from "../components/message/subagent-context"
 import FileMention from "../components/file-mention"
@@ -350,6 +351,24 @@ export default function Session() {
     setComposerToast(msg)
     if (toastTimer) clearTimeout(toastTimer)
     toastTimer = setTimeout(() => setComposerToast(""), 2500)
+  }
+
+  /**
+   * commitRename
+   * 参数：next 新标题（InlineTitle 已 trim 且与旧值不同）
+   * 核心流程：PUT title 子资源 → 就地更新 session 与标签栏标题；
+   *           失败只提示不改状态，标题保持原值
+   */
+  async function commitRename(next: string) {
+    const { workspaceId, sessionId } = params
+    try {
+      const saved = await renameSession(workspaceId, sessionId, next)
+      if (params.sessionId !== sessionId) return
+      setSession((prev) => (prev ? { ...prev, title: saved.title } : prev))
+      updateSessionTab({ id: saved.id, title: saved.title || "Untitled", workspaceId })
+    } catch (err) {
+      showComposerToast(errorMessage(err))
+    }
   }
 
   /**
@@ -1846,7 +1865,12 @@ export default function Session() {
         </button>
         {/* 会话标题 + 工作区信息：标题主行，项目名/路径副行（色点与标签栏一致） */}
         <div class="flex min-w-0 flex-1 flex-col justify-center">
-          <span class="truncate px-1 text-[13px] font-medium leading-4 text-text">{title()}</span>
+          <InlineTitle
+            value={title()}
+            class="truncate px-1 text-[13px] font-medium leading-4 text-text"
+            inputClass="mx-1 rounded-[4px] border border-edge bg-raised px-1 text-[13px] font-medium leading-4 text-text outline-none focus:border-accent"
+            onCommit={commitRename}
+          />
           <span
             class="flex min-w-0 items-center gap-1 px-1 text-[11px] leading-4 text-muted"
             title={workspacePath() || params.workspaceId}
