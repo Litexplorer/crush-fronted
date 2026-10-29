@@ -432,6 +432,24 @@ export function closeModelDialog() {
 }
 
 /**
+ * 会话压缩请求（前缀 + U / 命令面板）：自增计数，由会话页监听后执行，
+ * 因为 compact 依赖会话页内部的 agent 状态与消息列表，无法在全局直接调用
+ */
+const [compactRequest, setCompactRequest] = createSignal(0)
+
+export { compactRequest }
+
+/**
+ * requestCompact
+ * 参数：无
+ * 核心流程：自增请求计数通知会话页执行压缩；先取消前缀待命，避免残留状态
+ */
+export function requestCompact() {
+  cancelPrefix()
+  setCompactRequest((prev) => prev + 1)
+}
+
+/**
  * runtimeOverlayOpen
  * 参数：无
  * 核心流程：判断是否有挡在页面上的全局浮层（命令面板 / 标签列表 / 快捷键说明 / 历史会话 / 模型列表）——

@@ -38,7 +38,7 @@ import {
   publishSessionQuestions,
   questionJumpRequest,
 } from "../lib/session-questions"
-import { ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
+import { compactRequest, ensureSessionTab, openSessions, retargetSessionTabs, updateSessionTab } from "../lib/ui-store"
 import VirtualTimeline from "../components/message/virtual-timeline"
 import { recalledWorkspacePath, recalledYolo, rememberWorkspace, rememberYolo, selectedWorkspace, setSelectedWorkspace } from "../lib/workspace-store"
 import { createWorkspace, getWorkspace, type Workspace } from "../lib/workspaces"
@@ -1129,6 +1129,33 @@ export default function Session() {
   }
 
   /**
+   * 前缀 + U / 命令面板：全局只会发出压缩请求，真正执行要看当前会话状态，
+   * 因此在这里监听并复用 handleCompact，条件不满足时给出原因而不是静默失败
+   */
+  createEffect(
+    on(
+      compactRequest,
+      () => {
+        if (compacting()) return
+        if (busy() || sending()) {
+          showComposerToast("运行中无法压缩会话，请先停止当前回复")
+          return
+        }
+        if (agentState() !== "ready") {
+          showComposerToast("会话尚未就绪，稍后再试")
+          return
+        }
+        if (!messages().some((m) => m.role === "user")) {
+          showComposerToast("当前会话还没有消息，无需压缩")
+          return
+        }
+        void handleCompact()
+      },
+      { defer: true },
+    ),
+  )
+
+  /**
    * replaceHashAnchor
    * 参数：text 用于替换 # 的文本
    * 核心流程：按触发位置把草稿里的 # 换成 text → 下一帧聚焦输入框并把光标落到插入文本之后；
@@ -1979,7 +2006,7 @@ export default function Session() {
                   <button
                     type="button"
                     aria-label="Compact session"
-                    title="Summarize the conversation to reduce context size"
+                    title="Summarize the conversation to reduce context size（前缀 + U）"
                     class="flex items-center gap-1.5 rounded-[8px] border border-edge px-2 py-1 text-[11px] font-medium text-muted transition-colors hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={!canCompact()}
                     onClick={() => void handleCompact()}

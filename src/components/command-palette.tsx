@@ -17,6 +17,7 @@ import {
   openSessions,
   openShortcutHelp,
   openTabSwitcher,
+  requestCompact,
   toggleTabsOrientation,
   type ActiveSession,
 } from "../lib/ui-store"
@@ -138,6 +139,14 @@ export default function CommandPalette(props: { open: boolean; onClose: () => vo
         hint: "前缀 + M：列出当前工作区全部模型，可搜索",
         tag: "动作",
         run: () => openModelDialog(),
+      },
+      {
+        id: "action:compact-session",
+        kind: "action",
+        label: "压缩会话",
+        hint: "前缀 + U：把历史折叠成摘要，运行中不可用",
+        tag: "动作",
+        run: () => requestCompact(),
       },
       {
         id: "action:new-session",
