@@ -77,7 +77,8 @@ function errorMessage(err: unknown): string {
 /**
  * SessionPanel
  * 参数：props.wsId workspace ID；props.sessionId 会话 ID；
- *       props.questions 问答索引；props.activeQuestionId 当前问句；props.onJump 跳转回调
+ *       props.questions 问答索引；props.activeQuestionId 当前问句；props.onJump 跳转回调；
+ *       props.onClose 可选关闭回调（移动端抽屉用，桌面端不传即不渲染关闭按钮）
  * 核心流程：渲染 tab 栏并切换内容区 —— Q&A 挂载问答索引，
  *           Files 挂载文件树，Review 挂载变更 diff 视图，Terminal 挂载命令执行视图
  */
@@ -87,6 +88,7 @@ export default function SessionPanel(props: {
   questions: QuestionItem[]
   activeQuestionId: string
   onJump: (messageId: string) => void
+  onClose?: () => void
 }) {
   const [tab, setTab] = createSignal<PanelTab>("questions")
 
@@ -109,6 +111,22 @@ export default function SessionPanel(props: {
             </button>
           )}
         </For>
+        {/* 移动端抽屉没有其他收起入口，tab 栏右侧补一个关闭按钮；桌面端不传 onClose 不渲染 */}
+        <Show when={props.onClose}>
+          {(onClose) => (
+            <button
+              type="button"
+              aria-label="Close side panel"
+              title="Close side panel"
+              class="ml-auto flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
+              onClick={() => onClose()()}
+            >
+              <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke-linecap="round" />
+              </svg>
+            </button>
+          )}
+        </Show>
       </div>
 
       {/* 内容区：各 tab 独立挂载（切换即卸载重挂，状态自然重置） */}

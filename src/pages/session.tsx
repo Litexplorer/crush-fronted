@@ -49,6 +49,7 @@ import type { FileEntry } from "../lib/files"
 import { readSkill } from "../lib/skills"
 import type { MentionItem } from "../lib/mentions"
 import type { ApiError } from "../lib/http"
+import { isMobile } from "../lib/viewport"
 
 type LoadState = "loading" | "ready" | "error"
 type AgentState = "checking" | "ready" | "unready"
@@ -293,6 +294,15 @@ export default function Session() {
   // 右侧面板：折叠状态与宽度从 localStorage 恢复；拖拽中仅更新内存，松手才持久化
   const [panelOpen, setPanelOpen] = createSignal(!readPanelCollapsed())
   const [panelWidth, setPanelWidth] = createSignal(readPanelWidth())
+  // 移动端抽屉：窄屏上面板改为全屏浮层，默认收起，不读写桌面端的折叠/宽度持久化
+  const [mobilePanelOpen, setMobilePanelOpen] = createSignal(false)
+
+  /**
+   * panelVisible
+   * 参数：无
+   * 核心流程：面板是否可见 —— 桌面端看持久化的展开状态，移动端只看本次是否点开
+   */
+  const panelVisible = () => (isMobile() ? mobilePanelOpen() : panelOpen())
 
   // 会话待办：折叠态持久化；数据来自 getSession 与 SSE session 事件
   const [todosCollapsed, setTodosCollapsed] = createSignal(readTodosCollapsed())
@@ -1527,9 +1537,14 @@ export default function Session() {
   /**
    * togglePanel
    * 参数：无
-   * 核心流程：翻转右侧面板展开/折叠，并把折叠状态 + 当前宽度持久化 localStorage
+   * 核心流程：移动端只切换全屏抽屉开关（不持久化）；桌面端翻转右侧面板展开/折叠，
+   *           并把折叠状态 + 当前宽度持久化 localStorage
    */
   function togglePanel() {
+    if (isMobile()) {
+      setMobilePanelOpen((open) => !open)
+      return
+    }
     const next = !panelOpen()
     setPanelOpen(next)
     persistPanelState(!next, panelWidth())
@@ -1577,6 +1592,7 @@ export default function Session() {
         setAttachments([])
         setImages([])
         setMentionOpen(false)
+        setMobilePanelOpen(false)
         setActiveQuestionId("")
         setHighlightedMessageId("")
         setWorkspaceInfo(undefined)
@@ -1848,7 +1864,7 @@ export default function Session() {
   })
 
   return (
-    <div class="m-2 flex min-h-0 min-w-0 flex-1 flex-row gap-2 overflow-hidden">
+    <div class="m-1 flex min-h-0 min-w-0 flex-1 flex-row gap-2 overflow-hidden md:m-2">
       {/* 左栏：会话内容（header + 消息区 + 输入区），保持原单栏结构 */}
       <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-base">
       {/* SessionHeader：返回首页 + 会话标题 + SSE 状态点 + 面板切换按钮 */}
@@ -1882,7 +1898,7 @@ export default function Session() {
             />
             <span class="shrink-0">{workspaceName()}</span>
             <Show when={workspacePath()}>
-              <span class="min-w-0 truncate opacity-70">· {workspacePath()}</span>
+              <span class="min-w-0 truncate opacity-70 max-md:hidden">· {workspacePath()}</span>
             </Show>
           </span>
         </div>
@@ -1932,13 +1948,13 @@ export default function Session() {
               <path d="M13.4 2.8v2.9h-2.9" />
             </svg>
           </button>
-          {/* 面板切换按钮：展开/折叠右侧面板，状态持久化 localStorage */}
+          {/* 面板切换按钮：展开/折叠右侧面板，桌面端状态持久化 localStorage；移动端打开全屏抽屉 */}
           <button
             type="button"
-            aria-label={panelOpen() ? "Hide side panel" : "Show side panel"}
-            title={panelOpen() ? "Hide side panel" : "Show side panel"}
+            aria-label={panelVisible() ? "Hide side panel" : "Show side panel"}
+            title={panelVisible() ? "Hide side panel" : "Show side panel"}
             class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
-            classList={{ "bg-raised text-text": panelOpen() }}
+            classList={{ "bg-raised text-text": panelVisible() }}
             onClick={togglePanel}
           >
             <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -1980,7 +1996,7 @@ export default function Session() {
               onTouchStart={onTouchStartIntent}
               onTouchMove={onTouchMoveIntent}
             >
-              <div class="mx-auto flex w-full max-w-[1000px] flex-col px-4 py-5">
+              <div class="mx-auto flex w-full max-w-[1000px] flex-col px-3 py-4 md:px-4 md:py-5">
                 <Show when={messages().length > 0} fallback={
                   <div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>
                 }>
@@ -2022,7 +2038,7 @@ export default function Session() {
             </div>
 
             {/* 输入区：固定底部，错误条 + 输入框容器（圆角 12px、最小高 96px、最大宽 1000px 居中） */}
-            <div class="shrink-0 px-3 pb-3 pt-1">
+            <div class="shrink-0 px-2 pt-1 pb-2 md:px-3 md:pb-3 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
               <Show when={sendError()}>
                 <div class="mx-auto mb-2 max-w-[1000px] rounded-[8px] border border-[#e5484d]/40 bg-[#e5484d]/10 px-3 py-2 text-[12px] leading-4 text-[#e5484d]">
                   {sendError()}
@@ -2252,7 +2268,7 @@ export default function Session() {
                     disabled={agentState() !== "ready"}
                     placeholder="现在帮我"
                     rows={1}
-                    class="block max-h-[240px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-2 text-[13px] leading-5 text-text outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50"
+                    class="block max-h-[240px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-2 text-[16px] leading-6 text-text outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50 md:text-[13px] md:leading-5"
                   />
                   <div class="flex h-11 shrink-0 items-center gap-1 px-2">
                     <div class="flex min-w-0 flex-1 items-center gap-1">
@@ -2352,11 +2368,12 @@ export default function Session() {
       </Show>
       </div>
 
-      {/* 右栏：可折叠面板（折叠时整体隐藏、左栏自动占满），左缘拖拽调宽 320~640 */}
-      <Show when={panelOpen()}>
+      {/* 右栏：可折叠面板（折叠时整体隐藏、左栏自动占满），左缘拖拽调宽 320~640；
+          移动端改为全屏抽屉浮层，无拖拽把手，靠头部按钮或面板关闭按钮收起 */}
+      <Show when={panelVisible()}>
         <div
-          class="relative flex h-full shrink-0 flex-col overflow-hidden rounded-[10px] bg-base"
-          style={{ width: `${panelWidth()}px` }}
+          class="relative flex h-full shrink-0 flex-col overflow-hidden rounded-[10px] bg-base max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full max-md:rounded-none max-md:pb-[env(safe-area-inset-bottom)]"
+          style={isMobile() ? undefined : { width: `${panelWidth()}px` }}
         >
           <SessionPanel
             wsId={params.workspaceId}
@@ -2364,15 +2381,18 @@ export default function Session() {
             questions={questions()}
             activeQuestionId={activeQuestionId()}
             onJump={jumpToMessage}
+            onClose={isMobile() ? () => setMobilePanelOpen(false) : undefined}
           />
-          {/* 拖拽把手：贴左缘 8px 命中区，pointer capture 保证移出元素仍持续跟踪 */}
-          <div
-            class="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none"
-            onPointerDown={onPanelResizeStart}
-            onPointerMove={onPanelResizeMove}
-            onPointerUp={onPanelResizeEnd}
-            onPointerCancel={onPanelResizeEnd}
-          />
+          {/* 拖拽把手：仅桌面端渲染，贴左缘 8px 命中区，pointer capture 保证移出元素仍持续跟踪 */}
+          <Show when={!isMobile()}>
+            <div
+              class="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none"
+              onPointerDown={onPanelResizeStart}
+              onPointerMove={onPanelResizeMove}
+              onPointerUp={onPanelResizeEnd}
+              onPointerCancel={onPanelResizeEnd}
+            />
+          </Show>
         </div>
       </Show>
 

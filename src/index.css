@@ -1214,3 +1214,39 @@ html[data-theme="daybreak"] {
 .md-body .hljs-emphasis {
   font-style: italic;
 }
+
+/*
+ * 移动端基础适配（< 768px）
+ * 1. 高度改用 100dvh：移动浏览器地址栏收起/展开时 100% 会高于可见区，底部输入框被顶出屏幕
+ * 2. -webkit-text-size-adjust：关掉横屏自动放大字号
+ * 3. 点击高亮改成透明：触控端不做灰色点击闪烁
+ * 4. 正文区域的滚动容器打开惯性滚动，代码块左右留白收紧
+ */
+@media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+
+  body {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .md-body,
+  .md-pre {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .md-body .md-code {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .md-body img,
+  .md-body video {
+    max-width: 100%;
+    height: auto;
+  }
+}

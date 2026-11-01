@@ -17,9 +17,11 @@ import QuestionDialog from "./components/question-dialog"
 import ModelDialog from "./components/model-dialog"
 import ShortcutHelp from "./components/shortcut-help"
 import { closeCommandPalette, commandPaletteOpen, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
+import { isMobile } from "./lib/viewport"
 
 export default function App(props: ParentProps) {
-  const vertical = () => tabsOrientation() === "vertical"
+  // 纵向标签栏固定占 196px 宽，窄屏会把内容区压没，移动端一律按横向排布
+  const vertical = () => tabsOrientation() === "vertical" && !isMobile()
 
   onMount(() => {
     /**

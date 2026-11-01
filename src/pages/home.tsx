@@ -238,7 +238,7 @@ export default function Home() {
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
       {/* 视觉复刻 opencode 首页：外边距 8px、圆角 10px 的卡片，内容网格居中 */}
       <div class="m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-base">
-        <div class="mx-auto flex w-full max-w-[1080px] flex-1 flex-col gap-6 px-6 py-10 lg:flex-row lg:items-start lg:gap-8">
+        <div class="mx-auto flex w-full max-w-[1080px] flex-1 flex-col gap-4 px-4 py-6 lg:flex-row lg:items-start lg:gap-8 lg:px-6 lg:py-10">
           <ProjectsPanel
             workspaces={workspaces()}
             state={loadState()}
@@ -348,7 +348,7 @@ function ProjectsPanel(props: {
   const hiddenCount = createMemo(() => filtered().length - visible().length)
 
   return (
-    <aside class="flex w-full shrink-0 flex-col lg:w-[280px]">
+    <aside class="flex w-full shrink-0 flex-col lg:w-[280px] max-lg:border-b max-lg:border-edge max-lg:pb-4">
       <div class="flex h-7 shrink-0 items-center justify-between pl-1 pr-1">
         <span class="text-[12px] font-medium text-muted">Projects</span>
         {/* 添加项目：打开路径输入弹窗 */}
@@ -395,7 +395,7 @@ function ProjectsPanel(props: {
         </Show>
       </div>
 
-      <div class="mt-2 min-h-0 flex-1 overflow-y-auto">
+      <div class="mt-2 min-h-0 overflow-y-auto lg:flex-1">
         <Show
           when={props.state !== "error"}
           fallback={
@@ -589,7 +589,7 @@ function SessionsPanel(props: {
   )
 
   return (
-    <section class="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[720px] lg:flex-none">
+    <section class="flex min-h-0 min-w-0 flex-col lg:w-[720px] lg:flex-none">
       {/* 搜索框：720x36、圆角 8px、左侧放大镜 */}
       <div class="flex h-9 shrink-0 items-center gap-2 rounded-[8px] bg-raised px-2.5">
         <svg viewBox="0 0 16 16" class="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -606,7 +606,7 @@ function SessionsPanel(props: {
         />
       </div>
 
-      <div class="mt-2 min-h-0 flex-1 overflow-y-auto">
+      <div class="mt-2 min-h-0 overflow-y-auto lg:flex-1">
         <Show
           when={props.wsId}
           fallback={

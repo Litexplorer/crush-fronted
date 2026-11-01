@@ -29,6 +29,7 @@ import {
 } from "../lib/ui-store"
 import { workspaceColor } from "../lib/workspace-color"
 import { groupSessionTabs, type SessionTabGroup } from "../lib/session-groups"
+import { isMobile } from "../lib/viewport"
 import { isSessionRunning } from "../lib/run-status"
 import { dismissNotification, isSessionUnread } from "../lib/notifications"
 import { armPrefix, cancelPrefix, consumePrefix, prefixActive } from "../lib/key-prefix"
@@ -88,8 +89,8 @@ export default function Titlebar() {
   const [statusOpen, setStatusOpen] = createSignal(false)
   // 当前路由对应的会话标签：用于高亮与工作区回退
   const currentSessionId = () => routeSessionId(location.pathname)
-  // 标签栏布局：纵向时标签移到左侧栏，顶栏只保留操作按钮
-  const vertical = () => tabsOrientation() === "vertical"
+  // 标签栏布局：纵向时标签移到左侧栏，顶栏只保留操作按钮；移动端强制横向（196px 侧栏会挤死内容区）
+  const vertical = () => tabsOrientation() === "vertical" && !isMobile()
   const currentTab = () => openSessions().find((tab) => tab.id === currentSessionId())
   // 工作区配色键：项目路径优先，旧标签缺失路径时退化为 workspace id
   const tabColor = (tab: ActiveSession) => workspaceColor(tab.projectPath ?? tab.workspaceId)
@@ -888,7 +889,7 @@ export default function Titlebar() {
           </button>
           <Show when={tabsMenu()}>
             <div class="fixed inset-0 z-40" onClick={() => setTabsMenu(false)} />
-            <div class="absolute top-8 right-2 z-50 w-72 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl">
+            <div class="absolute top-8 right-2 z-50 w-72 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl max-md:fixed max-md:inset-x-2 max-md:top-10 max-md:w-auto">
               <div class="border-b border-edge px-2.5 py-1.5 text-[10px] font-semibold tracking-wide text-faint uppercase">
                 Open tabs
               </div>
@@ -998,7 +999,7 @@ export default function Titlebar() {
           <Show when={pickerOpen()}>
             <div class="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
             <div
-              class="absolute top-8 right-0 z-50 w-80 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl"
+              class="absolute top-8 right-0 z-50 w-80 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl max-md:fixed max-md:inset-x-2 max-md:top-10 max-md:w-auto"
               onKeyDown={(event) => {
                 if (event.key === "Escape") setPickerOpen(false)
               }}
@@ -1093,7 +1094,7 @@ export default function Titlebar() {
           <span
             role="status"
             aria-label="Prefix active, press arrow key to switch tabs or N to create a session"
-            class="flex shrink-0 items-center gap-1 rounded-[6px] border border-edge bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+            class="flex shrink-0 items-center gap-1 rounded-[6px] border border-edge bg-raised px-1.5 py-0.5 text-[10px] text-muted max-md:hidden"
           >
             <kbd class="font-sans text-accent">Ctrl+B</kbd>
             <span aria-hidden="true">→</span>
@@ -1117,13 +1118,13 @@ export default function Titlebar() {
             <kbd class="font-sans text-text">?</kbd>
           </span>
         </Show>
-        {/* 标签栏布局：横向/纵向切换，选择持久化到 localStorage */}
+        {/* 标签栏布局：横向/纵向切换，选择持久化到 localStorage；窄屏下纵向侧栏会挤死内容区，直接不提供 */}
         <button
           type="button"
           aria-label={vertical() ? "Switch to horizontal tabs" : "Switch to vertical tabs"}
           title={vertical() ? "标签栏：切换为横向" : "标签栏：切换为纵向"}
           aria-pressed={vertical()}
-          class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text"
+          class="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-text max-md:hidden"
           onClick={() => toggleTabsOrientation()}
         >
           <Show
