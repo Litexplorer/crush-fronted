@@ -3,7 +3,8 @@
  * 参数：无（接收路由 children）
  * 核心流程：App 骨架 ——
  *           横向标签栏：Titlebar（36px）+ 主内容区上下排列；
- *           纵向标签栏：改为「左侧标签栏 + 右侧（顶栏 + 内容）」的网格布局；
+ *           纵向标签栏：改为「左侧标签栏 + 右侧（顶栏 + 内容）」的网格布局，
+ *                       收起时首列补间到 28px，只留竖轨；
  *           两种布局共用同一个 Titlebar 实例，避免标签状态分裂；
  *           额外挂几个全局浮层：右下角完成通知、Ctrl+K 命令面板、标签列表、历史会话、本会话提问、模型列表、快捷键说明
  */
@@ -16,7 +17,7 @@ import HistoryDialog from "./components/history-dialog"
 import QuestionDialog from "./components/question-dialog"
 import ModelDialog from "./components/model-dialog"
 import ShortcutHelp from "./components/shortcut-help"
-import { closeCommandPalette, commandPaletteOpen, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
+import { closeCommandPalette, commandPaletteOpen, tabsCollapsed, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
 import { isMobile } from "./lib/viewport"
 
 export default function App(props: ParentProps) {
@@ -45,8 +46,13 @@ export default function App(props: ParentProps) {
       class="select-none bg-deep text-text"
       classList={{
         "flex min-h-0 min-w-0 flex-1 flex-col": !vertical(),
-        "grid min-h-0 min-w-0 flex-1 grid-cols-[196px_minmax(0,1fr)] grid-rows-[36px_minmax(0,1fr)]": vertical(),
+        "grid min-h-0 min-w-0 flex-1 grid-rows-[36px_minmax(0,1fr)] transition-[grid-template-columns] duration-200 ease-out": vertical(),
       }}
+      style={
+        vertical()
+          ? { "grid-template-columns": tabsCollapsed() ? "28px minmax(0, 1fr)" : "196px minmax(0, 1fr)" }
+          : undefined
+      }
     >
       <Titlebar />
       <main

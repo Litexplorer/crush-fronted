@@ -322,6 +322,43 @@ export function toggleTabsOrientation() {
   setTabsOrientation(tabsOrientation() === "vertical" ? "horizontal" : "vertical")
 }
 
+/** 纵向标签栏收起状态：收起后左缘只留 28px 竖轨，横向布局下不生效 */
+const TABS_COLLAPSED_KEY = "crush.tabsCollapsed"
+
+/**
+ * readTabsCollapsed
+ * 参数：无
+ * 核心流程：从 localStorage 读取纵向标签栏是否收起（"1" 为收起）；读取失败默认展开
+ */
+function readTabsCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TABS_COLLAPSED_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+const [tabsCollapsed, setTabsCollapsedSignal] = createSignal(readTabsCollapsed())
+
+export { tabsCollapsed }
+
+/**
+ * toggleTabsCollapsed
+ * 参数：无
+ * 核心流程：翻转纵向标签栏收起状态 → 写入 localStorage；存储失败仅本次页面生效
+ */
+export function toggleTabsCollapsed() {
+  setTabsCollapsedSignal((collapsed) => {
+    const next = !collapsed
+    try {
+      localStorage.setItem(TABS_COLLAPSED_KEY, next ? "1" : "0")
+    } catch {
+      // localStorage 不可用：仅当前会话内生效
+    }
+    return next
+  })
+}
+
 /** 命令面板开关：App 负责渲染，标签栏据此让出方向键与 Ctrl+K */
 const [commandPaletteOpen, setCommandPaletteOpen] = createSignal(false)
 

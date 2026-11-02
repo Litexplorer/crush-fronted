@@ -22,7 +22,9 @@ import {
   requestCompact,
   runtimeOverlayOpen,
   setActiveSession,
+  tabsCollapsed,
   tabsOrientation,
+  toggleTabsCollapsed,
   toggleTabsOrientation,
   updateSessionTab,
   type ActiveSession,
@@ -37,6 +39,7 @@ import { ensureLiveWorkspace, newSession, sessionUrl } from "../lib/session-acti
 import ThemeSelect from "./theme-select"
 import StatusPopover from "./status-popover"
 import { InlineTitle } from "./inline-title"
+import { SideRail } from "./side-rail"
 import NewSessionDialog from "./new-session-dialog"
 
 type ConnectionState = "connected" | "disconnected"
@@ -1183,15 +1186,48 @@ export default function Titlebar() {
       />
     </header>
 
-      {/* 纵向标签栏：左侧独立栏，分组与横向模式一致 */}
+      {/* 纵向标签栏：左侧独立栏，分组与横向模式一致；收起时整列补间到 28px，只留可点竖轨 */}
       <Show when={vertical()}>
         <aside
-          class="col-start-1 row-span-2 row-start-1 flex min-h-0 flex-col border-r border-edge bg-deep"
+          class="col-start-1 row-span-2 row-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-edge bg-deep"
           aria-label="Session tabs"
         >
+          <Show
+            when={!tabsCollapsed()}
+            fallback={
+              <SideRail
+                label="Tabs"
+                title="展开标签栏"
+                direction="right"
+                count={openSessions().length}
+                onExpand={toggleTabsCollapsed}
+              />
+            }
+          >
           <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge px-2.5">
             <span class="text-[10px] font-semibold tracking-wide text-faint uppercase">Tabs</span>
             <span class="text-[10px] text-faint">{openSessions().length}</span>
+            {/* 收起按钮：把纵向标签栏收成左缘竖轨，展开入口在竖轨上 */}
+            <button
+              type="button"
+              aria-label="Collapse tabs"
+              title="收起标签栏"
+              class="ml-auto flex size-6 shrink-0 items-center justify-center rounded-[5px] text-muted transition-colors hover:bg-raised hover:text-text"
+              onClick={toggleTabsCollapsed}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                class="size-3.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M8.5 4.5 5 8l3.5 3.5" />
+                <path d="M12 4.5 8.5 8l3.5 3.5" />
+              </svg>
+            </button>
           </div>
           <Show
             when={openSessions().length > 0}
@@ -1219,6 +1255,7 @@ export default function Titlebar() {
                 )}
               </For>
             </div>
+          </Show>
           </Show>
         </aside>
       </Show>

@@ -8,7 +8,8 @@
  *           输入区：Enter 发送（Shift+Enter 换行）、乐观插入用户消息、busy 时 Stop 可中断
  *           滚动：仅当用户贴近底部时新消息自动滚到底
  *           头部：会话标题 + 工作区名/路径（色点与标题栏标签一致）
- *           双栏：左侧会话内容，右侧 SessionPanel（Files 树，可折叠/拖宽，状态存 localStorage）
+ *           双栏：左侧会话内容，右侧 SessionPanel（Q&A / Files / Review / Terminal，可折叠/拖宽，
+ *                 折叠态在右缘留 28px 竖轨，状态存 localStorage）
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
@@ -31,6 +32,7 @@ import type { SelectedModel } from "../lib/models"
 import PermissionDock from "../components/permission-dock"
 import QuestionDock from "../components/question-dock"
 import SessionPanel from "../components/session-panel"
+import { SideRail } from "../components/side-rail"
 import TodoDock from "../components/todo-dock"
 import type { QuestionItem } from "../components/panel-questions"
 import {
@@ -2368,12 +2370,12 @@ export default function Session() {
       </Show>
       </div>
 
-      {/* 右栏：可折叠面板（折叠时整体隐藏、左栏自动占满），左缘拖拽调宽 320~640；
-          移动端改为全屏抽屉浮层，无拖拽把手，靠头部按钮或面板关闭按钮收起 */}
-      <Show when={panelVisible()}>
+      {/* 右栏：桌面端常挂载，收起时宽度补间到 0（左栏随之占满），左缘拖拽调宽 320~640；
+          移动端为全屏抽屉（固定定位会遮挡内容，收起即卸载），靠头部按钮或面板关闭按钮收起 */}
+      <Show when={!isMobile() || panelVisible()}>
         <div
-          class="relative flex h-full shrink-0 flex-col overflow-hidden rounded-[10px] bg-base max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full max-md:rounded-none max-md:pb-[env(safe-area-inset-bottom)]"
-          style={isMobile() ? undefined : { width: `${panelWidth()}px` }}
+          class="relative flex h-full min-w-0 shrink-0 flex-col overflow-hidden rounded-[10px] bg-base transition-[width,opacity] duration-200 ease-out max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full max-md:rounded-none max-md:pb-[env(safe-area-inset-bottom)]"
+          style={isMobile() ? undefined : { width: panelVisible() ? `${panelWidth()}px` : "0px" }}
         >
           <SessionPanel
             wsId={params.workspaceId}
@@ -2383,8 +2385,8 @@ export default function Session() {
             onJump={jumpToMessage}
             onClose={isMobile() ? () => setMobilePanelOpen(false) : undefined}
           />
-          {/* 拖拽把手：仅桌面端渲染，贴左缘 8px 命中区，pointer capture 保证移出元素仍持续跟踪 */}
-          <Show when={!isMobile()}>
+          {/* 拖拽把手：仅桌面端且面板展开时渲染，贴左缘 8px 命中区，pointer capture 保证移出元素仍持续跟踪 */}
+          <Show when={!isMobile() && panelVisible()}>
             <div
               class="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none"
               onPointerDown={onPanelResizeStart}
@@ -2395,6 +2397,23 @@ export default function Session() {
           </Show>
         </div>
       </Show>
+
+      {/* 收起态竖轨：与面板宽度互补补间（28px ↔ 0），展开收起都是滑入滑出，不跳变；
+          面板展开时竖轨收成 0 宽，按钮置禁用，避免零宽元素占住 Tab 焦点 */}
+      <div
+        class="h-full shrink-0 overflow-hidden transition-[width,opacity] duration-200 ease-out"
+        style={{ width: panelVisible() ? "0px" : "28px", opacity: panelVisible() ? 0 : 1 }}
+        aria-hidden={panelVisible() ? "true" : undefined}
+      >
+        <SideRail
+          label="Q&A"
+          title="展开右侧面板"
+          direction="left"
+          count={questions().length}
+          onExpand={togglePanel}
+          inactive={panelVisible()}
+        />
+      </div>
 
       {/* 会话信息弹窗：固定遮罩层，打开时焦点进入弹窗 */}
       <Show when={infoOpen()}>
