@@ -26,6 +26,7 @@ import { MarkdownText } from "./markdown"
 import { ClampedPreview } from "./clamped-preview"
 import { useSubagentStore } from "./subagent-context"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
+import { parseViewMedia, ViewMedia } from "./view-code"
 import type { ToolCallPartData, ToolResultPartData } from "./parts"
 
 interface SubagentCardProps {
@@ -343,7 +344,9 @@ function ClampedMarkdown(props: { text: string; lines?: number; tone?: "muted" |
 /**
  * SubagentToolRow
  * 参数：call 子会话工具调用；result 对应结果
- * 核心流程：紧凑工具行，运行中脉冲、失败标红；展开显示格式化 input 与原始输出
+ * 核心流程：紧凑工具行，运行中脉冲、失败标红；展开显示格式化 input 与原始输出；
+ *           结果带 image/video base64 时改上媒体卡（子 agent 的 view 图片才看得到），
+ *           否则 base64 只能以文本形式存在，用户看不到图
  */
 function SubagentToolRow(props: { call: ToolCallPartData; result?: ToolResultPartData }) {
   const [open, setOpen] = createSignal(false)
@@ -351,6 +354,10 @@ function SubagentToolRow(props: { call: ToolCallPartData; result?: ToolResultPar
   const failed = () => props.result?.is_error === true
   // 同主卡片：活动行是否运行中只看工具结果有没有回来
   const running = () => !props.result
+  // 媒体结果（view 图片/视频）：与主时间线共用同一套解析，展开即可看到缩略图
+  const media = createMemo(() =>
+    parseViewMedia(props.call.input, props.result?.mime_type, props.result?.data, props.result?.metadata),
+  )
   return (
     <div class="overflow-hidden rounded-[6px] border border-edge/70">
       <button
@@ -395,6 +402,8 @@ function SubagentToolRow(props: { call: ToolCallPartData; result?: ToolResultPar
       </button>
       <Show when={open()}>
         <div class="flex flex-col gap-1.5 border-t border-edge px-2 py-1.5">
+          {/* 媒体结果优先：图片直接出缩略图，点击可放大 */}
+          <Show when={media()}>{(data) => <ViewMedia data={data()} />}</Show>
           <ClampedPreview lineHeight={18} offset={16}>
             <pre class="md-pre">{formatJson(props.call.input)}</pre>
           </ClampedPreview>
