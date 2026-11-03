@@ -41,8 +41,7 @@ import StatusPopover from "./status-popover"
 import { InlineTitle } from "./inline-title"
 import { SideRail } from "./side-rail"
 import NewSessionDialog from "./new-session-dialog"
-
-type ConnectionState = "connected" | "disconnected"
+import { serverConnection } from "../lib/server-status"
 
 /** 标签分组：同一项目（projectPath）下的会话标签归为一组，分组逻辑见 lib/session-groups */
 type TabGroup = SessionTabGroup
@@ -64,23 +63,16 @@ function routeSessionId(pathname: string): string {
 }
 
 /**
- * checkHealth
+ * Titlebar
  * 参数：无
- * 核心流程：请求 /v1/health，2xx 视为已连接；任何错误静默返回未连接
+ * 核心流程：36px 顶栏 —— 左侧标签页与操作，右侧主题与后端连接状态圆点；
+ *           连接状态取自 lib/server-status 的全局轮询，本组件不再单独探测
  */
-async function checkHealth(): Promise<ConnectionState> {
-  try {
-    const res = await fetch("/v1/health", { method: "GET" })
-    return res.ok ? "connected" : "disconnected"
-  } catch {
-    return "disconnected"
-  }
-}
-
 export default function Titlebar() {
   const navigate = useNavigate()
   const location = useLocation()
-  const [state, setState] = createSignal<ConnectionState>("disconnected")
+  // 连接状态来自全局轮询（lib/server-status），与顶部提示条共用同一份信号
+  const state = () => (serverConnection() === "connected" ? "connected" : "disconnected")
   const [creating, setCreating] = createSignal(false)
   // 新建失败的提示文案：不阻断当前会话，4s 后自动消失
   const [createError, setCreateError] = createSignal("")
@@ -250,20 +242,6 @@ export default function Titlebar() {
   }
 
   onMount(() => onCleanup(() => stripObserver?.disconnect()))
-
-  onMount(() => {
-    // 首次探测 + 每 5s 轮询，结果驱动状态圆点颜色
-    let timer: ReturnType<typeof setInterval> | undefined
-
-    const poll = () => {
-      void checkHealth().then(setState)
-    }
-
-    poll()
-    timer = setInterval(poll, 5000)
-
-    onCleanup(() => clearInterval(timer))
-  })
 
   onMount(() => {
     // 全局快捷键：Ctrl+B 当前缀，之后单独按 ←/→ 组内切换、Shift+←/→ 按项目跳组（挂在 document 上）

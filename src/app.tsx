@@ -10,6 +10,7 @@
  */
 import { onCleanup, onMount, type ParentProps } from "solid-js"
 import Titlebar from "./components/titlebar"
+import ServerBanner from "./components/server-banner"
 import NotificationCenter from "./components/notification-center"
 import CommandPalette from "./components/command-palette"
 import TabSwitcher from "./components/tab-switcher"
@@ -19,12 +20,16 @@ import ModelDialog from "./components/model-dialog"
 import ShortcutHelp from "./components/shortcut-help"
 import { closeCommandPalette, commandPaletteOpen, tabsCollapsed, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
 import { isMobile } from "./lib/viewport"
+import { startServerStatusPolling } from "./lib/server-status"
 
 export default function App(props: ParentProps) {
   // 纵向标签栏固定占 196px 宽，窄屏会把内容区压没，移动端一律按横向排布
   const vertical = () => tabsOrientation() === "vertical" && !isMobile()
 
   onMount(() => {
+    // 启动全局服务端状态轮询：顶栏圆点与顶部提示条共用同一份状态
+    startServerStatusPolling()
+
     /**
      * handlePaletteShortcut
      * 参数：event 键盘事件
@@ -59,6 +64,8 @@ export default function App(props: ParentProps) {
         class="flex min-h-0 min-w-0 flex-1 select-text flex-col overflow-hidden [&_input]:select-text [&_textarea]:select-text"
         classList={{ "col-start-2 row-start-2": vertical() }}
       >
+        {/* 服务端不可用 / 换过二进制时的顶部提示条 */}
+        <ServerBanner />
         {props.children}
       </main>
       {/* 会话完成通知：右下角气泡，独立于页面内容，避免切页丢失 */}
