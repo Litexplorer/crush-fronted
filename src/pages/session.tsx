@@ -1022,11 +1022,24 @@ export default function Session() {
    * 核心流程：message created/updated 按 id upsert（并替换同文本乐观项）、deleted 移除；
    *           session/updated 更新标题（is_busy 仅 true 时采纳，避免恒 false 的 SSE 载荷误清 busy）；
    *           run_complete 匹配当前会话则结束 busy 态并清理残留乐观消息；
+   *           permission_mode_changed 刷新 YOLO 开关并回写本地缓存；
    *           permission_request/question_batch_request 按 session 过滤后入队，
    *           对应 notification 按请求 id 出队（其他客户端已处理的同步路径）
    */
   function handleEvent(ev: WorkspaceEvent) {
     const sid = params.sessionId
+    // 权限模式变更：任何客户端（含 TUI）改模式、或工作区被重置，都按服务端值刷新开关，
+    // 避免"开关显示 on 但实际仍在弹权限"的双向漂移
+    if (ev.type === "permission_mode_changed") {
+      const mode = (ev.payload as { mode?: string } | null)?.mode
+      if (typeof mode !== "string") return
+      const on = mode !== "normal"
+      setYolo(on)
+      setYoloError("")
+      const path = workspacePathFor(params.workspaceId)
+      if (path) rememberYolo(path, on)
+      return
+    }
     if (ev.type === "message") {
       const msg = ev.payload as ChatMessage | null
       if (!msg || !msg.id) return
@@ -1602,8 +1615,12 @@ export default function Session() {
         ensureEvents(wsId)
         const unsubscribe = subscribeEvents(handleEvent)
         // current-session 上报由 SSE 打开事件驱动：首次建连/重连成功都会触发；
-        // 已连接时注册即触发，保证会话切换立即上报（不在挂载时盲调，避免 409）
-        const unsubscribeOpen = onEventsOpen(() => void reportCurrentSession(wsId, sid))
+        // 已连接时注册即触发，保证会话切换立即上报（不在挂载时盲调，避免 409）。
+        // 同时补一次权限模式校准：断线期间的 permission_mode_changed 事件拿不到，只能重连后回查
+        const unsubscribeOpen = onEventsOpen(() => {
+          void reportCurrentSession(wsId, sid)
+          void loadYolo(wsId)
+        })
         onCleanup(() => {
           unsubscribeOpen()
           unsubscribe()
