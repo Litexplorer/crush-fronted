@@ -37,6 +37,13 @@ const [connection, setConnection] = createSignal<ConnectionState>("disconnected"
  */
 function open(wsId: string) {
   setConnection("connecting")
+  // 重连定时器可能在路由切换后又触发：先关旧连接并清掉自己的定时器，
+  // 否则会多开一条永不关闭的 EventSource，白占一条同源连接
+  clearTimeout(reconnectTimer)
+  if (es) {
+    es.close()
+    es = null
+  }
   const url = `/v1/workspaces/${encodeURIComponent(wsId)}/events?client_id=${encodeURIComponent(getClientId())}`
   const source = new EventSource(url)
   es = source

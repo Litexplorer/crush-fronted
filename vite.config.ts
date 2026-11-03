@@ -36,7 +36,18 @@ export default defineConfig({
             if (typeof contentType === "string" && contentType.includes("text/event-stream")) {
               res.flushHeaders()
             }
+            // 后端中途断开时 pipe 不会替我们调 end：补一次收尾，否则浏览器这条 SSE 会半开挂着
+            // 永不结束，每重启一次后端就漏一条，占满同源连接池后所有请求永久排队（表现是永远 loading）
+            proxyRes.on("close", () => {
+              if (!res.writableEnded) res.end()
+            })
             proxyRes.pipe(res)
+          })
+          proxy.on("error", (_err, _req, res) => {
+            // vite 自带的 error handler 在 headersSent 之后直接 return，响应永不结束；
+            // 这里只在已开始流式输出时兜底结束，未下发响应头的情况仍交给 vite 回 500
+            const out = res as unknown as { headersSent?: boolean; writableEnded?: boolean; end?: () => void }
+            if (out?.headersSent && !out.writableEnded) out.end?.()
           })
         },
       },

@@ -49,7 +49,8 @@ export default function FileMention(props: {
   /**
    * load
    * 参数：path 相对目录
-   * 核心流程：GET /files?path → 写列表、重置选中行并聚焦搜索框；失败进入行内错误态
+   * 核心流程：GET /files?path → 写列表、重置选中行并聚焦搜索框；失败进入行内错误态；
+   *           收尾统一放 finally，只由最后一次请求复位 loading，保证不会永久停在 Loading…
    */
   async function load(path: string) {
     const seq = ++loadSeq
@@ -66,9 +67,13 @@ export default function FileMention(props: {
     } catch (err) {
       if (seq !== loadSeq) return
       setError(errorMessage(err))
+    } finally {
+      // 被新请求覆盖时不复位，交给新请求收尾；否则 loading 会有旧请求提前清掉
+      if (seq === loadSeq) {
+        setLoading(false)
+        queueMicrotask(() => inputRef?.focus())
+      }
     }
-    setLoading(false)
-    queueMicrotask(() => inputRef?.focus())
   }
 
   onMount(() => {
@@ -240,7 +245,19 @@ export default function FileMention(props: {
       <div class="min-h-0 flex-1 overflow-y-auto p-1">
         <Show
           when={!error()}
-          fallback={<div class="px-2 py-3 text-[12px] text-[#e5484d]">{error()}</div>}
+          fallback={
+            <div class="px-2 py-3 text-center text-[12px] text-[#e5484d]">
+              <div class="break-words">{error()}</div>
+              {/* 失败给出可点的重试，而不是让浮层停在错误/加载态 */}
+              <button
+                type="button"
+                class="mt-1.5 rounded-[4px] border border-edge px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-raised hover:text-text"
+                onClick={() => void load(dir())}
+              >
+                重试
+              </button>
+            </div>
+          }
         >
           <Show
             when={!loading()}
