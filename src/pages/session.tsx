@@ -1023,7 +1023,8 @@ export default function Session() {
    *           session/updated 更新标题（is_busy 仅 true 时采纳，避免恒 false 的 SSE 载荷误清 busy）；
    *           run_complete 匹配当前会话则结束 busy 态并清理残留乐观消息；
    *           permission_mode_changed 刷新 YOLO 开关并回写本地缓存；
-   *           permission_request/question_batch_request 按 session 过滤后入队，
+   *           permission_request/question_batch_request 按 session 过滤后入队
+   *           （子会话的授权请求同样入队，后端已按根会话路由到本客户端），
    *           对应 notification 按请求 id 出队（其他客户端已处理的同步路径）
    */
   function handleEvent(ev: WorkspaceEvent) {
@@ -1104,7 +1105,10 @@ export default function Session() {
     }
     if (ev.type === "permission_request") {
       const req = ev.payload as PermissionRequest | null
-      if (!req?.id || req.session_id !== sid) return
+      if (!req?.id) return
+      // 子 agent 的授权请求也进当前会话的 Dock：后端已按根会话路由到这里，
+      // 只认父会话 id 会把子 agent 卡在一个谁也看不见的弹窗上
+      if (req.session_id !== sid && !knownSubagentIds.has(req.session_id)) return
       // 入队：同 id 去重，FIFO 逐条处理
       setPermissionQueue((prev) => (prev.some((p) => p.id === req.id) ? prev : [...prev, req]))
       return
