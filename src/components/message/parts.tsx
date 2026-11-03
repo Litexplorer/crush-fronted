@@ -373,8 +373,8 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               // todos 工具由底部 Todo Dock 统一展示，时间线不再重复渲染
               if (name === "todos") return null
               const key = `tool:${tc.id ?? index()}`
-              // agent 卡片只在真正运行时自动展开，已完成的历史记录默认收起，避免刷屏
-              const autoOpen = () => key === `tool:${runningToolId()}` && (name !== "agent" || (!tc.finished && !result))
+              // agent 卡片只在真正运行时自动展开（参数落地≠跑完，只看结果是否回来），已完成的历史记录默认收起
+              const autoOpen = () => key === `tool:${runningToolId()}` && (name !== "agent" || !result)
               const open = () => overrides()[key] ?? (autoOpen() || defaultOpenTool(name, result))
               // 按 id 找同消息内对应 result 合并展示
               const inlineResult = props.message.parts.find((p) => {
@@ -396,7 +396,6 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
                     messageId={props.message.id}
                     toolCall={tc}
                     result={result}
-                    finished={tc.finished === true}
                     open={open()}
                     onToggle={() => toggle(key, open())}
                   />

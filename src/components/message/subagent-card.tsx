@@ -1,7 +1,9 @@
 /**
  * subagent-card.tsx
  * 参数：messageId 父 assistant 消息；toolCall agent 工具调用；result 对应工具结果；
- *       finished 工具是否完成；open / onToggle 可选受控展开
+ *       result 子 agent 最终结果（tool_result）；open / onToggle 可选受控展开
+ *   运行态只认 tool_result 是否到达：tool_call.finished 是「参数流结束」，
+ *   子 agent 往往在参数落地后还要跑很久，拿它当「执行结束」会一启动就显示 Done
  * 核心流程：子 agent 专用卡片 ——
  *           header    任务标题、运行状态、耗时与当前步骤
  *           task      原始任务 prompt（Markdown、限高）
@@ -30,7 +32,6 @@ interface SubagentCardProps {
   messageId: string
   toolCall: ToolCallPartData
   result?: ToolResultPartData
-  finished: boolean
   open?: boolean
   onToggle?: () => void
 }
@@ -105,7 +106,9 @@ export default function SubagentCard(props: SubagentCardProps) {
   const loading = () => (id() ? store?.loading()[id()] === true : false)
   const loadError = () => (id() ? store?.errors()[id()] ?? "" : "")
 
-  const running = () => props.finished !== true && !props.result
+  // 子 agent 结束的唯一信号是它自己的 tool_result：参数落地时 tool_call.finished
+  // 已经是 true，但子 agent 那时才刚启动，拿它判运行态会直接显示 Done
+  const running = () => !props.result
   const failed = () => props.result?.is_error === true
 
   const title = createMemo(() => {
@@ -291,7 +294,6 @@ export default function SubagentCard(props: SubagentCardProps) {
                           messageId={activity().messageId}
                           toolCall={call()}
                           result={call().id ? results().get(call().id ?? "") : undefined}
-                          finished={call().finished === true}
                         />
                       </Show>
                     )
@@ -347,7 +349,8 @@ function SubagentToolRow(props: { call: ToolCallPartData; result?: ToolResultPar
   const [open, setOpen] = createSignal(false)
   const name = () => props.call.name || "tool"
   const failed = () => props.result?.is_error === true
-  const running = () => !props.result && props.call.finished !== true
+  // 同主卡片：活动行是否运行中只看工具结果有没有回来
+  const running = () => !props.result
   return (
     <div class="overflow-hidden rounded-[6px] border border-edge/70">
       <button
