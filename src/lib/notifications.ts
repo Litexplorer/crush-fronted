@@ -2,8 +2,8 @@
  * notifications.ts
  * 核心流程：全局「会话跑完了」通知表 ——
  *           SSE 收到 run_complete 且该会话已有标签时入队（同一会话覆盖去重）；
- *           正在看这个会话 → 播放提示音并 10 秒后自动消失；
- *           不在这个会话 → 一直挂着，直到用户切到该会话才开始 10 秒倒计时
+ *           气泡只在屏幕上停 10 秒，不论当前在哪个页面；
+ *           没看过的结果靠标签上的未读圆点留痕，圆点只在真正打开该会话时消掉
  */
 import { createSignal } from "solid-js"
 import { subscribeEvents } from "./events"
@@ -25,7 +25,7 @@ export interface SessionNotification {
   createdAt: number
 }
 
-/** 气泡在「当前会话」停留时长 */
+/** 气泡停留时长：任何页面都只保留这么久，不留常驻气泡 */
 export const NOTIFICATION_TTL_MS = 10_000
 /** 通知表最多保留条数，超出丢弃最旧的 */
 const MAX_NOTIFICATIONS = 5
@@ -109,32 +109,39 @@ function markUnread(sessionId: string, unread: boolean) {
 }
 
 /**
- * dismissNotification
+ * dismissBubble
  * 参数：sessionId 会话 ID
- * 核心流程：移除通知、清掉计时器并消掉未读角标；手动关闭与倒计时到期都走这里
+ * 核心流程：只关气泡并清掉倒计时，保留标签上的未读圆点 ——
+ *           圆点只由「真正打开该会话」消掉，关不关气泡不影响它
  */
-export function dismissNotification(sessionId: string) {
+export function dismissBubble(sessionId: string) {
   clearTimer(sessionId)
-  markUnread(sessionId, false)
   setNotifications((prev) => (prev.some((item) => item.sessionId === sessionId) ? prev.filter((item) => item.sessionId !== sessionId) : prev))
 }
 
 /**
- * startTimerIfViewing
+ * dismissNotification
  * 参数：sessionId 会话 ID
- * 核心流程：只为「正在看的会话」起 10 秒倒计时；其他会话保持常驻，等切过去再起
+ * 核心流程：关气泡并消掉未读圆点；只在「通知已彻底失去意义」时使用（如标签被关闭）
  */
-function startTimerIfViewing(sessionId: string) {
-  if (viewingSessionId() !== sessionId) {
-    clearTimer(sessionId)
-    return
-  }
-  if (timers.has(sessionId)) return
+export function dismissNotification(sessionId: string) {
+  dismissBubble(sessionId)
+  markUnread(sessionId, false)
+}
+
+/**
+ * startDismissTimer
+ * 参数：sessionId 会话 ID
+ * 核心流程：每个气泡都只活 10 秒，不论当前停在哪个页面；
+ *           没看过的结果由标签上的未读圆点留痕，气泡不再常驻
+ */
+function startDismissTimer(sessionId: string) {
+  clearTimer(sessionId)
   timers.set(
     sessionId,
     setTimeout(() => {
       timers.delete(sessionId)
-      dismissNotification(sessionId)
+      dismissBubble(sessionId)
     }, NOTIFICATION_TTL_MS),
   )
 }
@@ -142,21 +149,21 @@ function startTimerIfViewing(sessionId: string) {
 /**
  * setViewingSession
  * 参数：sessionId 当前打开的会话（不在会话页时为 undefined）
- * 核心流程：切换当前会话 → 进入的会话清掉未读角标并开始 10 秒倒计时、
- *           离开的会话暂停计时保持常驻
+ * 核心流程：进入某会话即消掉它的未读圆点并关掉它的气泡（已经在看，不需要提示）
  */
 export function setViewingSession(sessionId: string | undefined) {
   if (viewingSessionId() === sessionId) return
   setViewingSessionIdRaw(sessionId)
-  if (sessionId) markUnread(sessionId, false)
-  for (const item of notifications()) startTimerIfViewing(item.sessionId)
+  if (!sessionId) return
+  markUnread(sessionId, false)
+  dismissBubble(sessionId)
 }
 
 /**
  * pushNotification
  * 参数：sessionId 会话 ID；text 尾部回复；status 结束状态
  * 核心流程：解析标签拿标题 → 组装通知（同会话覆盖、新条目置顶、超出上限丢最旧）
- *           → 若正在看该会话则响铃并起倒计时
+ *           → 若正在看该会话则响铃；气泡统一 10 秒后自动消失
  */
 function pushNotification(sessionId: string, text: string | undefined, status: NotificationStatus) {
   if (!notifyEnabled()) return
@@ -172,10 +179,10 @@ function pushNotification(sessionId: string, text: string | undefined, status: N
   clearTimer(sessionId)
   setNotifications((prev) => [entry, ...prev.filter((item) => item.sessionId !== sessionId)].slice(0, MAX_NOTIFICATIONS))
   const viewing = viewingSessionId() === sessionId
-  // 不在这个会话里跑完的，标签上留一个角标：气泡会超时消失，角标要一直在
+  // 不在这个会话里跑完的，标签上留一个圆点：气泡 10 秒后消失，圆点要一直在
   markUnread(sessionId, !viewing)
   if (viewing) playNotificationSound()
-  startTimerIfViewing(sessionId)
+  startDismissTimer(sessionId)
 }
 
 // 订阅全局 SSE：run_complete 说明某会话本回合已结束

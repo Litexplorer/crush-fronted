@@ -3,13 +3,13 @@
  * 参数：无
  * 核心流程：右下角「会话跑完了」气泡堆 ——
  *           每条展示状态色点 + 会话标题 + 尾部回复摘要；
- *           点击气泡跳到对应会话（跳转后由通知表接管 10 秒倒计时），
- *           也可手动关闭；同时把当前路由上的会话同步给通知表，
- *           让它知道哪些气泡该倒计时、哪些该常驻
+ *           气泡无论停在哪一页都只活 10 秒；
+ *           点击气泡跳到对应会话并立刻关掉它；
+ *           同时把当前路由上的会话同步给通知表，用于消掉未读圆点
  */
 import { For, createEffect, on } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
-import { dismissNotification, notifications, setViewingSession, type SessionNotification } from "../lib/notifications"
+import { dismissBubble, dismissNotification, notifications, setViewingSession, type SessionNotification } from "../lib/notifications"
 import { ensureLiveWorkspace, sessionUrl } from "../lib/session-actions"
 import { openSessions, setActiveSession } from "../lib/ui-store"
 
@@ -24,7 +24,7 @@ const STATUS_STYLE: Record<SessionNotification["status"], { dot: string; label: 
  * currentSessionId
  * 参数：pathname 当前路由路径
  * 核心流程：从 /w/<ws>/session/<id> 里取会话 ID，非会话页返回 undefined，
- *           通知表据此决定气泡是倒计时还是常驻
+ *           通知表据此把「已打开」的会话标为已读
  */
 function currentSessionId(pathname: string): string | undefined {
   const match = /^\/w\/[^/]+\/session\/([^/?#]+)/.exec(pathname)
@@ -35,7 +35,7 @@ export default function NotificationCenter() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  // 路由变化：正在看的会话开始 10 秒倒计时，离开的会话暂停并保持常驻
+  // 路由变化：把当前打开的会话同步给通知表（消未读圆点、关掉它的气泡）
   // 显式声明依赖，避免函数内部读到通知表导致每次新通知都重跑同步逻辑
   createEffect(on(() => location.pathname, (pathname) => setViewingSession(currentSessionId(pathname))))
 
@@ -43,7 +43,7 @@ export default function NotificationCenter() {
    * open
    * 参数：item 被点击的通知
    * 核心流程：按会话 ID 找回标签（关闭过则直接丢弃通知）→ 解析有效工作区
-   *           → 设为当前会话并跳转；不在此处删除通知，交给跳转后的倒计时
+   *           → 设为当前会话并跳转，同时立刻关掉这条气泡
    */
   async function open(item: SessionNotification) {
     const tab = openSessions().find((candidate) => candidate.id === item.sessionId)
@@ -51,6 +51,7 @@ export default function NotificationCenter() {
       dismissNotification(item.sessionId)
       return
     }
+    dismissBubble(item.sessionId)
     const workspaceId = await ensureLiveWorkspace(tab.projectPath, tab.workspaceId)
     const target = { ...tab, workspaceId: workspaceId ?? tab.workspaceId }
     setActiveSession(target)
@@ -95,7 +96,8 @@ export default function NotificationCenter() {
                 class="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded text-muted opacity-0 transition-opacity hover:bg-edge-strong hover:text-text focus-visible:opacity-100 group-hover:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
-                  dismissNotification(item.sessionId)
+                  // 只关气泡：未读圆点要留到用户真正打开该会话
+                  dismissBubble(item.sessionId)
                 }}
               >
                 <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5">
