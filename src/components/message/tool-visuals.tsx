@@ -55,7 +55,7 @@ export function toolIcon(name: string): JSX.Element {
       </svg>
     )
   }
-  if (lower === "agent") {
+  if (/^agent(_|$)/.test(lower)) {
     return (
       <svg viewBox="0 0 16 16" class="size-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
         <circle cx="8" cy="4.5" r="2" />
@@ -132,12 +132,22 @@ export function toolSummary(name: string, inputRaw: string | undefined): string 
       return fileName + (filePath.includes("/") ? `  ·  ${filePath}` : "") + position
     }
   }
-  if (lower === "agent") {
+  if (lower === "agent" || lower === "agent_dispatch") {
+    const label = input.label
     const prompt = input.prompt
+    const access = typeof input.access === "string" ? input.access : ""
+    const suffix = access ? ` · ${access}` : ""
+    if (typeof label === "string" && label.trim()) return truncate(label.trim(), 60) + suffix
     if (typeof prompt === "string" && prompt) {
       const firstLine = prompt.split("\n").map((line) => line.trim()).find((line) => line.length > 0)
-      if (firstLine) return truncate(firstLine, 80)
+      if (firstLine) return truncate(firstLine, 80) + suffix
     }
+    return access || "…"
+  }
+  // agent_send / agent_status / agent_stop：头部标出寻址用的子 agent 名字
+  if (lower === "agent_send" || lower === "agent_status" || lower === "agent_stop") {
+    const target = input.label ?? input.name ?? input.task_id
+    if (typeof target === "string" && target.trim()) return truncate(target.trim(), 80)
   }
   // MCP：参数已在卡片内常显，头部只标出服务名与工具名，不再回退原始 JSON
   if (isMcpTool(name)) return truncate(mcpToolName(name), 80)
@@ -167,6 +177,10 @@ const TOOL_LABELS: Record<string, string> = {
   todos: "Todos",
   question: "Question",
   agent: "Agent",
+  agent_dispatch: "Agent Dispatch",
+  agent_send: "Agent Send",
+  agent_status: "Agent Status",
+  agent_stop: "Agent Stop",
   agentic_fetch: "AgentFetch",
   job_output: "Job Output",
   job_kill: "Job Kill",

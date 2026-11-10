@@ -7,16 +7,19 @@
  *           tool_call       工具卡片：图标+名称+参数摘要，可展开 input JSON；
  *                           MCP 工具全部参数常显，按 tool_call_id 合并对应 tool_result 一并展示
  *           tool_result     无对应调用时独立成卡
+ *           sub_agent_report 后台子 agent 的回执，独立成卡渲染
  *           shell_command   $ command + output 等宽卡片
  *           image_url/binary 图片缩略图（点击放大），非图片 binary 仍显示 [image] 占位
  *           finish          底部一行小字（结果 + 耗时）
  */
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import type { ContentPart, SessionMessage } from "../../lib/sessions"
+import type { SubagentReportPartData } from "../../lib/subagents"
 import { tokenRate } from "../../lib/usage"
 import { MarkdownText } from "./markdown"
 import { MindmapText } from "./mindmap-text"
 import SubagentCard from "./subagent-card"
+import SubagentReportCard from "./subagent-report-card"
 import { ClampedPreview } from "./clamped-preview"
 import EditDiff, { parseEditDiff } from "./edit-diff"
 import ViewCode, { parseViewData, parseViewMedia, ViewMedia } from "./view-code"
@@ -95,6 +98,15 @@ export interface ImageUrlPartData {
 }
 
 /**
+ * isSubagentReportPart
+ * 参数：part 内容分片
+ * 核心流程：识别后台子 agent 的回执分片（后端 part 类型 sub_agent_report）
+ */
+function isSubagentReportPart(part: ContentPart): boolean {
+  return part.type === "sub_agent_report"
+}
+
+/**
  * imageSrc
  * 参数：part 内容分片
  * 核心流程：binary 的 base64 拼成 data URL（仅 image/*），image_url 直接取 url；
@@ -122,6 +134,16 @@ export function partText(part: ContentPart): string {
   const data = (part.data ?? {}) as TextPartData
   if (data.hidden === true || typeof data.text !== "string") return ""
   return data.text
+}
+
+/**
+ * isSubagentCall
+ * 参数：name 工具名
+ * 核心流程：阻塞式 agent 与后台派发的 agent_dispatch 共用子 agent 卡片；
+ *           两者的子会话 id 都是 messageID$$toolCallID
+ */
+export function isSubagentCall(name: string | undefined): boolean {
+  return name === "agent" || name === "agent_dispatch"
 }
 
 /**
@@ -163,7 +185,7 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
   if (
     props.message.role === "user" &&
     !textOf(props.message).trim() &&
-    !props.message.parts.some((part) => imageSrc(part))
+    !props.message.parts.some((part) => imageSrc(part) || isSubagentReportPart(part))
   ) {
     return null
   }
@@ -181,6 +203,10 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
         >
           <For each={props.message.parts}>
             {(part) => {
+              // 后台子 agent 的回执：不是用户输入，渲染成回执卡片
+              if (isSubagentReportPart(part)) {
+                return <SubagentReportCard report={(part.data ?? {}) as SubagentReportPartData} />
+              }
               // 文本分片：保留换行；hidden（上下文注入）不展示
               if (part.type === "text") {
                 const text = partText(part)
@@ -386,11 +412,8 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               // 否则 view/edit 这类需要 metadata 的卡片只能看到调用参数
               const crossResult = tc.id ? subagent?.toolResults().get(tc.id) : undefined
               // agent 结果同样跨消息：从会话级结果表补齐，才能停掉转圈并展示最终答复
-              const result =
-                name === "agent" && tc.id
-                  ? (subagent?.toolResults().get(tc.id) ?? inlineData)
-                  : (crossResult ?? inlineData)
-              if (name === "agent") {
+              const result = isSubagentCall(name) && tc.id ? (subagent?.toolResults().get(tc.id) ?? inlineData) : (crossResult ?? inlineData)
+              if (isSubagentCall(name)) {
                 return (
                   <SubagentCard
                     messageId={props.message.id}
@@ -416,7 +439,7 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               if (mergedResults().has(index())) return null
               const tr = data as ToolResultPartData
               // todos 由 Todo Dock 统一展示；agent 结果由上方 SubagentCard 跨消息合并，避免重复卡片
-              if ((tr.name || "") === "todos" || (tr.name || "") === "agent") return null
+              if ((tr.name || "") === "todos" || isSubagentCall(tr.name)) return null
               // 结果消息只带 tool_call_id：反查原始调用，edit/bash/view 卡片据此展示参数与内容
               const origin = tr.tool_call_id ? subagent?.toolCalls().get(tr.tool_call_id) : undefined
               const name = tr.name || origin?.name || "tool"
@@ -434,6 +457,9 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
                   onToggle={() => toggle(resultKey, resultOpen())}
                 />
               )
+            }
+            case "sub_agent_report": {
+              return <SubagentReportCard report={data as SubagentReportPartData} />
             }
             case "shell_command": {
               const sc = data as ShellCommandPartData

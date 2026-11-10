@@ -2,8 +2,8 @@
  * subagent-card.tsx
  * 参数：messageId 父 assistant 消息；toolCall agent 工具调用；result 对应工具结果；
  *       result 子 agent 最终结果（tool_result）；open / onToggle 可选受控展开
- *   运行态只认 tool_result 是否到达：tool_call.finished 是「参数流结束」，
- *   子 agent 往往在参数落地后还要跑很久，拿它当「执行结束」会一启动就显示 Done
+ *   运行态：阻塞式 agent 看 tool_result 是否到达；后台派发的 agent_dispatch
+ *   结果只是一句「已启动」，要等子会话跑完或回执（sub_agent_report）到达才算结束
  * 核心流程：子 agent 专用卡片 ——
  *           header    任务标题、运行状态、耗时与当前步骤
  *           task      原始任务 prompt（Markdown、限高）
@@ -27,7 +27,7 @@ import { ClampedPreview } from "./clamped-preview"
 import { useSubagentStore } from "./subagent-context"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
 import { parseViewMedia, ViewMedia } from "./view-code"
-import type { ToolCallPartData, ToolResultPartData } from "./parts"
+import { partText, type ToolCallPartData, type ToolResultPartData } from "./parts"
 
 interface SubagentCardProps {
   messageId: string
@@ -107,10 +107,27 @@ export default function SubagentCard(props: SubagentCardProps) {
   const loading = () => (id() ? store?.loading()[id()] === true : false)
   const loadError = () => (id() ? store?.errors()[id()] ?? "" : "")
 
+  // 后台派发（agent_dispatch）与阻塞式 agent 的结束信号不同：前者的 tool_result
+  // 只是「已启动」，要在子会话跑完（finish 分片）或父会话收到回执时才结束
+  const dispatch = () => (props.toolCall.name ?? "") === "agent_dispatch"
+  const report = createMemo(() => {
+    const label = meta().label
+    return label ? store?.reports().get(label) : undefined
+  })
+  const childSettled = () => {
+    const list = childMessages()
+    const last = list[list.length - 1]
+    return !!last && last.parts.some((part) => part.type === "finish")
+  }
+
   // 子 agent 结束的唯一信号是它自己的 tool_result：参数落地时 tool_call.finished
   // 已经是 true，但子 agent 那时才刚启动，拿它判运行态会直接显示 Done
-  const running = () => !props.result
-  const failed = () => props.result?.is_error === true
+  const running = () => {
+    if (props.result?.is_error === true) return false
+    if (!dispatch()) return !props.result
+    return !report() && !childSettled()
+  }
+  const failed = () => props.result?.is_error === true || report()?.failed === true
 
   const title = createMemo(() => {
     const metaTitle = meta().title
@@ -120,7 +137,27 @@ export default function SubagentCard(props: SubagentCardProps) {
     return subagentTitle(prompt())
   })
 
-  const resultContent = () => props.result?.content ?? ""
+  // 后台任务的句柄结果只是一句「已派发」，真正的答复在回执里，回执缺席时
+  // 退回子会话最后一条 assistant 文本
+  const childAnswer = () => {
+    const list = childMessages()
+    for (let i = list.length - 1; i >= 0; i--) {
+      const message = list[i]
+      if (message.role !== "assistant" || message.is_summary_message) continue
+      const text = message.parts
+        .filter((part) => part.type === "text")
+        .map(partText)
+        .join("")
+        .trim()
+      if (text) return text
+    }
+    return ""
+  }
+
+  const resultContent = () => {
+    if (!dispatch()) return props.result?.content ?? ""
+    return report()?.output ?? childAnswer()
+  }
 
   const results = createMemo(() => {
     const map = new Map<string, ToolResultPartData>()
@@ -166,7 +203,9 @@ export default function SubagentCard(props: SubagentCardProps) {
     return value && value > 0 ? formatDuration(value) : ""
   })
 
-  const modelLabel = createMemo(() => meta().model || lastAssistantModel(childMessages()))
+  const modelLabel = createMemo(
+    () => meta().run_model || meta().model || lastAssistantModel(childMessages()),
+  )
 
   const usageLabel = createMemo(() => {
     const session = childSession()
@@ -286,7 +325,7 @@ export default function SubagentCard(props: SubagentCardProps) {
                     const call = () => activity().call
                     return (
                       <Show
-                        when={(call().name ?? "") === "agent"}
+                        when={["agent", "agent_dispatch"].includes(call().name ?? "")}
                         fallback={
                           <SubagentToolRow call={call()} result={call().id ? results().get(call().id ?? "") : undefined} />
                         }
@@ -304,7 +343,7 @@ export default function SubagentCard(props: SubagentCardProps) {
             </Show>
           </section>
 
-          <Show when={resultContent()}>
+          <Show when={!running() && resultContent()}>
             <section class="mt-3">
               <div class="mb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">Result</div>
               <ClampedMarkdown text={resultContent()} tone={failed() ? "error" : "text"} />

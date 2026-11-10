@@ -23,6 +23,7 @@ import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type 
 import { InlineTitle } from "../components/inline-title"
 import RunningIndicator from "../components/message/running-indicator"
 import { SubagentProvider, type SubagentStore } from "../components/message/subagent-context"
+import type { SubagentReportPartData } from "../lib/subagents"
 import FileMention from "../components/file-mention"
 import HashMention from "../components/hash-mention"
 import ModelSelect from "../components/model-select"
@@ -775,6 +776,19 @@ export default function Session() {
     return map
   })
 
+  /** 后台子 agent 回执表：sub_agent_report 分片挂在父会话的用户消息上，按 label 索引 */
+  const subagentReports = createMemo(() => {
+    const map = new Map<string, SubagentReportPartData>()
+    for (const message of messages()) {
+      for (const part of message.parts) {
+        if (part.type !== "sub_agent_report") continue
+        const data = (part.data ?? {}) as SubagentReportPartData
+        if (data.label) map.set(data.label, data)
+      }
+    }
+    return map
+  })
+
   const subagentStore: SubagentStore = {
     messages: subagentMessages,
     sessions: subagentSessions,
@@ -782,6 +796,7 @@ export default function Session() {
     errors: subagentErrors,
     toolResults,
     toolCalls,
+    reports: subagentReports,
     ensure: (sessionId) => void ensureSubagentLoaded(sessionId),
   }
 

@@ -4,6 +4,7 @@
  *           childSessionId     按后端约定拼出子会话 ID（messageID$$toolCallID）
  *           parseSubagentPrompt 从 tool_call input 读取 prompt
  *           parseSubagentMeta   解析 tool_result.metadata 里的结构化信息
+ *           parseSubagentReport 解析 sub_agent_report 分片（后台任务的回执）
  *           subagentTitle       从 prompt 首个非空行生成可读标题
  *           loadSubagent        读取子会话信息 + 历史消息
  */
@@ -15,6 +16,22 @@ export interface SubagentMeta {
   model?: string
   provider?: string
   duration_ms?: number
+  /** 后台派发的子 agent 名字（label 加名字前缀），也是报告与 agent_send 的地址 */
+  label?: string
+  /** 实际运行的模型展示名，agent_dispatch 用 run_model 汇报 */
+  run_model?: string
+}
+
+/**
+ * SubagentReportPartData
+ * 核心流程：后台子 agent 跑完后写入父会话的回执分片（part.type = sub_agent_report），
+ *           与用户输入无关，需要单独渲染
+ */
+export interface SubagentReportPartData {
+  label?: string
+  output?: string
+  failed?: boolean
+  model?: string
 }
 
 export interface SubagentSnapshot {
@@ -61,6 +78,8 @@ export function parseSubagentMeta(metadata: string | undefined): SubagentMeta {
     if (typeof data.model === "string") meta.model = data.model
     if (typeof data.provider === "string") meta.provider = data.provider
     if (typeof data.duration_ms === "number") meta.duration_ms = data.duration_ms
+    if (typeof data.label === "string") meta.label = data.label
+    if (typeof data.run_model === "string") meta.run_model = data.run_model
     return meta
   } catch {
     return {}

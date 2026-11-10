@@ -1,11 +1,12 @@
 /**
  * subagent-context.tsx
  * 核心流程：子 agent 数据的只读上下文 ——
- *           会话页持有子会话消息/会话信息/加载态/跨消息工具结果，
- *           时间线里的 SubagentCard 按 child session id 读取，避免逐层传 props
+ *           会话页持有子会话消息/会话信息/加载态/跨消息工具结果/后台回执，
+ *           时间线里的 SubagentCard 按 child session id 或 label 读取，避免逐层传 props
  */
 import { createContext, useContext, type Accessor, type JSX } from "solid-js"
 import type { Session, SessionMessage } from "../../lib/sessions"
+import type { SubagentReportPartData } from "../../lib/subagents"
 import type { ToolCallPartData, ToolResultPartData } from "./parts"
 
 export interface SubagentStore {
@@ -15,6 +16,8 @@ export interface SubagentStore {
   errors: Accessor<Record<string, string>>
   toolResults: Accessor<Map<string, ToolResultPartData>>
   toolCalls: Accessor<Map<string, ToolCallPartData>>
+  /** 后台子 agent 的回执，按 label 索引：派发卡片据此判断跑完并展示答复 */
+  reports: Accessor<Map<string, SubagentReportPartData>>
   ensure: (sessionId: string) => void
 }
 
