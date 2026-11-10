@@ -3,7 +3,7 @@
  * 核心流程：消息内容渲染层 ——
  *           MessageItem     消息入口：user 右侧气泡 / assistant 左对齐逐分片渲染
  *           text            user 纯文本保留换行，assistant 走 Markdown
- *           reasoning       Thinking 折叠卡：流式自动展开、结束自动折叠，可点击切换
+ *           reasoning       Thinking 折叠卡：默认展开且生成结束后保持展开，可点击手动收起
  *           tool_call       工具卡片：图标+名称+参数摘要，可展开 input JSON；
  *                           MCP 工具全部参数常显，按 tool_call_id 合并对应 tool_result 一并展示
  *           tool_result     无对应调用时独立成卡
@@ -227,8 +227,9 @@ export function MessageItem(props: { message: TimelineMessage; showFinish?: bool
 /**
  * SummaryMessage
  * 参数：message 压缩摘要消息（is_summary_message）
- * 核心流程：默认折叠为一行状态条，展开后按 Markdown 展示摘要正文；
- *           尚无 finish 分片时显示 Summarizing，提示压缩仍在进行
+ * 核心流程：默认展开，正文按 Markdown 贴底预览最后 10 行，压缩后真正要看的是
+ *           最新这段上下文；点 Show more 全量展开，尚无 finish 分片时显示
+ *           Summarizing，提示压缩仍在进行
  */
 function SummaryMessage(props: { message: TimelineMessage }) {
   const [open, setOpen] = createSignal(true)
@@ -271,7 +272,8 @@ function SummaryMessage(props: { message: TimelineMessage }) {
       <Show when={open()}>
         <div class="border-t border-edge px-3 py-2 text-[13px] leading-5">
           <Show when={texts().length > 0} fallback={<span class="text-[12px] text-faint">No summary yet.</span>}>
-            <ClampedPreview lines={10} lineHeight={20} class="text-[13px] leading-5">
+            {/* 贴底预览：压缩摘要默认露出最后 10 行，流式生成时同步跟到最后一段 */}
+            <ClampedPreview lines={10} lineHeight={20} anchor="bottom" class="text-[13px] leading-5">
               <For each={texts()}>{(text) => <MarkdownText text={text} streaming={streaming()} />}</For>
             </ClampedPreview>
           </Show>
@@ -387,7 +389,8 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const r = data as ReasoningPartData
               const key = `reasoning:${index()}`
               const streaming = isStreaming() && !r.finished_at
-              const open = () => overrides()[key] ?? streaming
+              // 默认展开：思考过程本身就是内容，结束后不自动收起，仅用户手动点收起才折叠
+              const open = () => overrides()[key] ?? true
               if (!r.thinking && !streaming) return null
               return (
                 <ReasoningBlock open={open()} streaming={streaming} thinking={r.thinking ?? ""} onToggle={() => toggle(key, open())} />
