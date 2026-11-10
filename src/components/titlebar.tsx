@@ -979,8 +979,11 @@ export default function Titlebar() {
           </button>
           <Show when={pickerOpen()}>
             <div class="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
+            {/* 纵向模式下标签栏收进侧栏，这排按钮挪到了顶栏左侧；
+                再按 right-0 展开 320px 的面板会顶出视口左边，所以改从左缘向右展开 */}
             <div
-              class="absolute top-8 right-0 z-50 w-80 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl max-md:fixed max-md:inset-x-2 max-md:top-10 max-md:w-auto"
+              class="absolute top-8 z-50 w-80 overflow-hidden rounded-[8px] border border-edge bg-deep shadow-xl max-md:fixed max-md:inset-x-2 max-md:top-10 max-md:w-auto"
+              classList={{ "right-0": !vertical(), "left-0": vertical() }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") setPickerOpen(false)
               }}
