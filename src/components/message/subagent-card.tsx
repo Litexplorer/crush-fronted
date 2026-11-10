@@ -250,6 +250,8 @@ export default function SubagentCard(props: SubagentCardProps) {
       classList={{
         "border-[#e5484d]/50": failed(),
         "border-edge hover:border-edge-strong": !failed(),
+        // 运行中呼吸灯：前台阻塞与后台派发都在跑，用光晕表达「还在跑」
+        "subagent-breath": running() && !failed(),
       }}
     >
       <button

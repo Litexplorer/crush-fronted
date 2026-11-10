@@ -1041,6 +1041,35 @@ svg.markmap-svg.markmap {
   background: linear-gradient(to bottom, var(--bg-base), transparent);
 }
 
+/*
+ * 子 agent 运行中呼吸灯（subagent-card.tsx）
+ * 边框色与外圈光晕按 2.2s 循环明暗，前台阻塞与后台派发共用同一套视觉；
+ * 只动 border-color/box-shadow，不触发重排，不会挤动时间线
+ */
+@keyframes subagent-breath {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--accent) 78%, transparent);
+    box-shadow: 0 0 12px 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}
+
+.subagent-breath {
+  animation: subagent-breath 2.2s ease-in-out infinite;
+}
+
+/* 关闭动效时保留一圈淡色边，卡片仍然表达「正在运行」 */
+@media (prefers-reduced-motion: reduce) {
+  .subagent-breath {
+    animation: none;
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+}
+
 /* 正文代码块默认 10 行预览（markdown.tsx 增强后加 data-code-clamp） */
 .md-body .md-code[data-code-clamp="collapsed"] {
   position: relative;
