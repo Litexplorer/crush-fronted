@@ -29,8 +29,17 @@ import {
   updateSessionTab,
   type ActiveSession,
 } from "../lib/ui-store"
-import { workspaceColor } from "../lib/workspace-color"
-import { groupSessionTabs, type SessionTabGroup } from "../lib/session-groups"
+import { PALETTE, workspaceColor } from "../lib/workspace-color"
+import { groupSessionTabs, type SessionListRow, type SessionTabGroup } from "../lib/session-groups"
+import {
+  assignSessionGroup,
+  createSessionGroup,
+  deleteSessionGroup,
+  renameSessionGroup,
+  sessionGroupConfig,
+  setSessionGroupColor,
+} from "../lib/session-group-store"
+import { SessionGroupList } from "./session-group-list"
 import { isMobile } from "../lib/viewport"
 import { isSessionRunning } from "../lib/run-status"
 import { dismissNotification, isSessionUnread } from "../lib/notifications"
@@ -87,15 +96,89 @@ export default function Titlebar() {
   // 标签栏布局：纵向时标签移到左侧栏，顶栏只保留操作按钮；移动端强制横向（196px 侧栏会挤死内容区）
   const vertical = () => tabsOrientation() === "vertical" && !isMobile()
   const currentTab = () => openSessions().find((tab) => tab.id === currentSessionId())
-  // 工作区配色键：项目路径优先，旧标签缺失路径时退化为 workspace id
-  const tabColor = (tab: ActiveSession) => workspaceColor(tab.projectPath ?? tab.workspaceId)
+  /**
+   * userGroupOf
+   * 参数：sessionId 标签对应的会话 id
+   * 核心流程：归属表命中且组仍存在时返回该组，否则 undefined（标签按项目分组）
+   */
+  function userGroupOf(sessionId: string) {
+    const config = sessionGroupConfig()
+    const groupId = config.overrides[sessionId]
+    return groupId ? config.groups.find((group) => group.id === groupId) : undefined
+  }
+
+  /**
+   * tabColor
+   * 参数：tab 会话标签
+   * 核心流程：归到用户分组时用组色（未选色回退组 id 哈希），否则按项目路径取色，
+   *           与标签条组头、选择器列表保持同一套颜色
+   */
+  const tabColor = (tab: ActiveSession) => {
+    const owner = userGroupOf(tab.id)
+    if (!owner) return workspaceColor(tab.projectPath ?? tab.workspaceId)
+    const solid = owner.color ?? workspaceColor(owner.id)?.solid
+    return solid ? { solid, tint: `color-mix(in srgb, ${solid} 14%, var(--bg-raised))` } : undefined
+  }
+
   /**
    * tabGroups
    * 参数：无
-   * 核心流程：按项目把标签分组（按首次出现顺序），组键用 projectPath ——
-   *           workspace id 是服务端内存态，重启后会变
+   * 核心流程：按用户分组 + 项目把标签分组（按首次出现顺序），组键用 group:<id>
+   *           或 projectPath —— workspace id 是服务端内存态，重启后会变
    */
-  const tabGroups = createMemo<TabGroup[]>(() => groupSessionTabs(openSessions()))
+  const tabGroups = createMemo<TabGroup[]>(() =>
+    groupSessionTabs(openSessions(), sessionGroupConfig().groups, sessionGroupConfig().overrides),
+  )
+
+  /** 标签右键菜单：目标标签与位置；naming 表示菜单内正在输入组名（新建/改名） */
+  const [tabMenu, setTabMenu] = createSignal<{ id: string; x: number; y: number }>()
+  const [menuNaming, setMenuNaming] = createSignal<"create" | "rename" | "">("")
+  const [menuName, setMenuName] = createSignal("")
+
+  /**
+   * openTabMenu
+   * 参数：event 右键事件；tab 目标标签
+   * 核心流程：阻止原生菜单 → 记录鼠标位置（贴边时夹回视口内）→ 复位菜单内的输入态
+   */
+  function openTabMenu(event: MouseEvent, tab: ActiveSession) {
+    event.preventDefault()
+    setMenuNaming("")
+    setMenuName("")
+    setTabMenu({
+      id: tab.id,
+      x: Math.min(event.clientX, window.innerWidth - 232),
+      y: Math.min(event.clientY, window.innerHeight - 300),
+    })
+  }
+
+  /** closeTabMenu：关闭菜单并清掉输入态，避免下次右键残留草稿 */
+  function closeTabMenu() {
+    setTabMenu(undefined)
+    setMenuNaming("")
+    setMenuName("")
+  }
+
+  /**
+   * commitMenuName
+   * 参数：无（读取 menuNaming 与 menuName）
+   * 核心流程：新建组时建完顺手把该标签归进去；改名只改组名 —— 提交后关闭菜单
+   */
+  function commitMenuName() {
+    const menu = tabMenu()
+    const name = menuName().trim()
+    const mode = menuNaming()
+    setMenuNaming("")
+    setMenuName("")
+    if (!menu || !name) return
+    if (mode === "create") {
+      const id = createSessionGroup(name)
+      if (id) assignSessionGroup(menu.id, id)
+      closeTabMenu()
+      return
+    }
+    const owner = userGroupOf(menu.id)
+    if (mode === "rename" && owner) renameSessionGroup(owner.id, name)
+  }
 
   /**
    * visibleTabs
@@ -143,6 +226,30 @@ export default function Titlebar() {
     if (!query) return pickerSessions()
     return pickerSessions().filter((session) => (session.title || "Untitled").toLowerCase().includes(query))
   })
+
+  /** 选择器历史列表的行数据：补副标题 / 相对时间 / Working，交给分组列表渲染 */
+  const pickerRows = createMemo<SessionListRow[]>(() =>
+    filteredSessions().map((session) => ({
+      id: session.id,
+      title: session.title || "Untitled",
+      subtitle: session.subtitle,
+      workspaceId: pickerWsId(),
+      projectPath: selectedWorkspace()?.path ?? currentTab()?.projectPath,
+      messageCount: session.message_count ?? 0,
+      updatedAt: session.updated_at ?? 0,
+      isBusy: session.is_busy === true,
+    })),
+  )
+
+  /**
+   * openPickerRow
+   * 参数：row 分组列表里点中的行
+   * 核心流程：按 id 回查原始 Session，复用 openExisting 登记标签并跳转
+   */
+  function openPickerRow(row: SessionListRow) {
+    const session = pickerSessions().find((item) => item.id === row.id)
+    if (session) openExisting(session)
+  }
 
   /**
    * updateScrollState
@@ -663,6 +770,7 @@ export default function Titlebar() {
         }}
         onDrop={(event) => dropTab(event, props.tab)}
         onDragEnd={endTabDrag}
+        onContextMenu={(event) => openTabMenu(event, props.tab)}
         class="group relative flex min-w-0 items-center rounded-[6px] pr-1 transition-colors"
         classList={{
           "h-[26px] max-w-[220px] shrink-0": !props.vertical,
@@ -829,6 +937,16 @@ export default function Titlebar() {
                     class="h-4 w-[2px] shrink-0 rounded-full"
                     style={{ "background-color": group.solid ?? "transparent" }}
                   />
+                  {/* 用户分组在横向标签条上给一个组名标签，否则只能靠色轨猜归属 */}
+                  <Show when={group.groupId}>
+                    <span
+                      class="max-w-[88px] shrink-0 truncate text-[10px] font-medium tracking-wide"
+                      style={{ color: group.solid ?? "var(--text-faint)" }}
+                      title={`Group: ${group.label}`}
+                    >
+                      {group.label}
+                    </span>
+                  </Show>
                   <For each={group.tabs}>
                     {(tab) => (
               <TabItem tab={tab} vertical={false} />
@@ -1046,26 +1164,16 @@ export default function Titlebar() {
                       </>
                     )}
                   </For>
-                  <div class="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-faint uppercase">
-                    History
-                  </div>
                 </Show>
 
-                <For each={filteredSessions()}>
-                  {(session) => (
-                    <button
-                      type="button"
-                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
-                      onClick={() => openExisting(session)}
-                    >
-                      <span class="min-w-0 flex-1 truncate">{session.title || "Untitled"}</span>
-                      <Show when={currentSessionId() === session.id}>
-                        <span class="shrink-0 text-[10px] text-accent">current</span>
-                      </Show>
-                      <span class="shrink-0 text-[10px] text-faint">{session.message_count ?? 0}</span>
-                    </button>
-                  )}
-                </For>
+                {/* 历史会话：按本地分组配置渲染，组头带色块与折叠 */}
+                <Show when={pickerRows().length > 0}>
+                  <SessionGroupList
+                    rows={pickerRows()}
+                    currentSessionId={currentSessionId()}
+                    onOpen={openPickerRow}
+                  />
+                </Show>
               </div>
             </div>
           </Show>
@@ -1239,6 +1347,162 @@ export default function Titlebar() {
           </Show>
           </Show>
         </aside>
+      </Show>
+
+      {/* 标签右键菜单：分组相关的操作都挂在这里，不用再去选择器面板翻列表 */}
+      <Show when={tabMenu()}>
+        {(menu) => (
+          <>
+            <div
+              class="fixed inset-0 z-[60]"
+              onClick={closeTabMenu}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                closeTabMenu()
+              }}
+            />
+            <div
+              class="fixed z-[61] w-56 overflow-hidden rounded-[8px] border border-edge bg-deep py-1 shadow-xl"
+              style={{ left: `${menu().x}px`, top: `${menu().y}px` }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") closeTabMenu()
+              }}
+            >
+              <div class="truncate px-2.5 py-1.5 text-[10px] tracking-wide text-faint uppercase">
+                {openSessions().find((tab) => tab.id === menu().id)?.title || "Untitled"}
+              </div>
+
+              <div class="px-2.5 pt-0.5 pb-1 text-[10px] text-faint">Move to group</div>
+              <For each={sessionGroupConfig().groups}>
+                {(group) => (
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                    onClick={() => {
+                      assignSessionGroup(menu().id, group.id)
+                      closeTabMenu()
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class="size-2 shrink-0 rounded-[2px]"
+                      style={{ "background-color": group.color ?? "var(--text-faint)" }}
+                    />
+                    <span class="min-w-0 flex-1 truncate">{group.name}</span>
+                    <Show when={userGroupOf(menu().id)?.id === group.id}>
+                      <span class="shrink-0 text-[10px] text-accent">✓</span>
+                    </Show>
+                  </button>
+                )}
+              </For>
+
+              {/* 新建组 / 改名共用同一行输入，Enter 提交，Esc 退回菜单 */}
+              <Show
+                when={menuNaming()}
+                fallback={
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-faint transition-colors hover:bg-raised hover:text-text"
+                    onClick={() => {
+                      setMenuNaming("create")
+                      setMenuName("")
+                    }}
+                  >
+                    <svg viewBox="0 0 16 16" class="size-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8">
+                      <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
+                    </svg>
+                    New group…
+                  </button>
+                }
+              >
+                <div class="px-2 py-1">
+                  <input
+                    value={menuName()}
+                    autofocus
+                    placeholder={menuNaming() === "rename" ? "Rename group" : "New group name"}
+                    class="w-full rounded-[6px] border border-edge bg-base px-2 py-1 text-[12px] text-text outline-none placeholder:text-faint focus:border-edge-strong"
+                    onInput={(event) => setMenuName(event.currentTarget.value)}
+                    onBlur={() => {
+                      setMenuNaming("")
+                      setMenuName("")
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation()
+                      if (event.key === "Enter") {
+                        event.preventDefault()
+                        commitMenuName()
+                      }
+                      if (event.key === "Escape") {
+                        setMenuNaming("")
+                        setMenuName("")
+                      }
+                    }}
+                  />
+                </div>
+              </Show>
+
+              <Show when={userGroupOf(menu().id)}>
+                {(owner) => (
+                  <>
+                    <div class="my-1 h-px bg-edge" />
+                    <div class="flex flex-wrap items-center gap-1 px-2.5 py-1">
+                      <span class="w-full pb-0.5 text-[10px] text-faint">Group color</span>
+                      <For each={PALETTE}>
+                        {(color) => (
+                          <button
+                            type="button"
+                            aria-label={`Use ${color}`}
+                            class="size-3.5 rounded-[2px] border border-black/20"
+                            classList={{ "ring-1 ring-text": owner().color === color }}
+                            style={{ "background-color": color }}
+                            onClick={() => setSessionGroupColor(owner().id, color)}
+                          />
+                        )}
+                      </For>
+                      <button
+                        type="button"
+                        class="ml-1 text-[10px] text-faint hover:text-text"
+                        onClick={() => setSessionGroupColor(owner().id, undefined)}
+                      >
+                        Auto
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                      onClick={() => {
+                        setMenuNaming("rename")
+                        setMenuName(owner().name)
+                      }}
+                    >
+                      Rename group
+                    </button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+                      onClick={() => {
+                        assignSessionGroup(menu().id, undefined)
+                        closeTabMenu()
+                      }}
+                    >
+                      Remove from group
+                    </button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[#e5484d] transition-colors hover:bg-raised"
+                      onClick={() => {
+                        deleteSessionGroup(owner().id)
+                        closeTabMenu()
+                      }}
+                    >
+                      Delete group
+                    </button>
+                  </>
+                )}
+              </Show>
+            </div>
+          </>
+        )}
       </Show>
     </div>
   )

@@ -27,6 +27,8 @@ export interface Session {
   completion_tokens: number
   total_tokens: number
   summary_message_id: string
+  /** 首条 user 消息首行：会话列表的副标题（老服务端不返回该字段） */
+  subtitle?: string
   cost: number
   todos?: SessionTodo[]
   channel?: string
