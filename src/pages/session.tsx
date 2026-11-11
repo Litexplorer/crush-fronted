@@ -345,6 +345,8 @@ export default function Session() {
   let hashAnchor = -1
   // 贴近底部标记：用户上翻即停用自动滚动，重新滚到底部附近后恢复
   let stickToBottom = true
+  // 是否已滚到时间线末尾：只驱动右下角「滚到底」按钮的形态，不参与跟随判定
+  const [atBottom, setAtBottom] = createSignal(true)
   // 容器内指针是否按下：按住拖动滚动条/选中文本时产生的滚动才算用户操作
   let pointerHeld = false
   // 触摸手势起点纵坐标：手指下移（内容上翻）才关闭跟随
@@ -1475,8 +1477,24 @@ export default function Session() {
     if (!el) return
     // 位置变化即刷新右侧 Q&A 选中项，程序化的贴底滚动同样需要
     scheduleQuestionSync()
+    // 按钮形态只认几何距离：程序化滚动和用户滚动都要跟着变，与跟随开关无关
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
     if (!pointerHeld) return
     stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
+
+  /**
+   * scrollToEnd
+   * 参数：无（读取滚动容器）
+   * 核心流程：恢复跟随 → 瞬时跳到末尾 → 按钮立刻切回「已在末尾」形态
+   */
+  function scrollToEnd() {
+    const el = scrollRef
+    if (!el) return
+    stickToBottom = true
+    el.scrollTop = el.scrollHeight
+    setAtBottom(true)
+    scheduleQuestionSync()
   }
 
   /**
@@ -2072,6 +2090,26 @@ export default function Session() {
                     </div>
                   </SubagentProvider>
                 </Show>
+              </div>
+              {/* 滚到底按钮：贴底时淡出表示「已在末尾」，脱离底部时高亮，点击瞬时回到末尾；
+                  用 sticky 贴在滚动视口右下角，无需额外定位容器 */}
+              <div class="pointer-events-none sticky bottom-0 flex justify-end px-3 pb-2">
+                <button
+                  type="button"
+                  aria-label={atBottom() ? "Already at the latest message" : "Scroll to latest message"}
+                  title={atBottom() ? "Already at the latest message" : "Scroll to latest message"}
+                  class="pointer-events-auto flex size-8 items-center justify-center rounded-full border shadow-lg transition-all"
+                  classList={{
+                    "border-edge bg-base/80 text-faint opacity-50 hover:opacity-80": atBottom(),
+                    "border-accent/60 bg-base text-accent hover:bg-raised": !atBottom(),
+                  }}
+                  onClick={scrollToEnd}
+                >
+                  <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <path d="M8 3v9" stroke-linecap="round" />
+                    <path d="M4 8.5 8 12.5l4-4" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
               </div>
             </div>
 
