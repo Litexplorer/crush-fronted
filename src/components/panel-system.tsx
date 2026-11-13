@@ -227,8 +227,16 @@ export default function SystemTab() {
           <div class="flex flex-col gap-2.5 p-3">
             {/* 主机信息：主机名 + 平台/核数/开机时长 */}
             <div class="flex items-baseline justify-between gap-2">
-              <span class="truncate text-[12px] font-medium text-text" title={snap().host.hostname}>
-                {snap().host.hostname}
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="truncate text-[12px] font-medium text-text" title={snap().host.hostname}>
+                  {snap().host.hostname}
+                </span>
+                {/* 容器口径：内存与 CPU 都是 cgroup 限额，不是宿主机总量 */}
+                <Show when={snap().memory.limit_source === "cgroup"}>
+                  <span class="shrink-0 rounded-[4px] bg-raised px-1 py-0.5 text-[9px] leading-none text-muted">
+                    container
+                  </span>
+                </Show>
               </span>
               <span class="shrink-0 text-[10px] text-faint">
                 {snap().host.platform} · {snap().host.num_cpu} cores · up {formatUptime(snap().host.uptime_s)}
@@ -258,8 +266,13 @@ export default function SystemTab() {
                     )}
                   </For>
                 </div>
-                <div class="mt-1.5 text-[10px] text-faint">
-                  load {snap().cpu.load1.toFixed(2)} / {snap().cpu.load5.toFixed(2)} / {snap().cpu.load15.toFixed(2)}
+                <div class="mt-1.5 flex justify-between text-[10px] text-faint">
+                  <span>
+                    load {snap().cpu.load1.toFixed(2)} / {snap().cpu.load5.toFixed(2)} / {snap().cpu.load15.toFixed(2)}
+                  </span>
+                  <Show when={snap().cpu.quota_cores > 0}>
+                    <span>quota {snap().cpu.quota_cores.toFixed(1)} cores</span>
+                  </Show>
                 </div>
               </MetricCard>
 
@@ -271,7 +284,10 @@ export default function SystemTab() {
               >
                 <UsageBar percent={snap().memory.percent} />
                 <div class="mt-1.5 flex justify-between text-[10px] text-faint">
-                  <span>available {formatBytes(snap().memory.available_bytes)}</span>
+                  <span>
+                    available {formatBytes(snap().memory.available_bytes)}
+                    <Show when={snap().memory.limit_source === "cgroup"}> · cgroup limit</Show>
+                  </span>
                   <Show when={snap().memory.swap_total_bytes > 0}>
                     <span>
                       swap {formatBytes(snap().memory.swap_used_bytes)} / {formatBytes(snap().memory.swap_total_bytes)}

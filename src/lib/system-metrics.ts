@@ -19,6 +19,8 @@ export interface SystemCPU {
   load1: number
   load5: number
   load15: number
+  /** CPU 配额核数（cgroup），0 表示未设限 */
+  quota_cores: number
 }
 
 export interface SystemMemory {
@@ -28,6 +30,8 @@ export interface SystemMemory {
   percent: number
   swap_total_bytes: number
   swap_used_bytes: number
+  /** 数据口径：cgroup 表示容器限额，host 表示宿主机 /proc/meminfo */
+  limit_source: "cgroup" | "host"
 }
 
 export interface SystemDisk {
