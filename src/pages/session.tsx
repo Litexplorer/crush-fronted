@@ -119,6 +119,9 @@ function imageFiles(files: FileList | File[]): File[] {
   return [...files].filter((file) => file.type.startsWith("image/"))
 }
 
+/** 折叠阈值：默认只挂载最后 N 条问答，长会话首屏不必把全部历史塞进虚拟列表 */
+const COLLAPSED_QA_LIMIT = 20
+
 /** 本地消息：在 proto.Message 基础上加 pending 标记（乐观插入、尚未被 SSE 真实消息替换） */
 type ChatMessage = TimelineMessage
 
@@ -337,6 +340,8 @@ export default function Session() {
 
   let scrollRef: HTMLDivElement | undefined
   let draftRef: HTMLTextAreaElement | undefined
+  // 折叠横幅：展开后变吸顶条，跳转定位时要把它的高度从锚点里扣掉，否则目标被盖住
+  let collapseBarRef: HTMLDivElement | undefined
   // 输入历史游标：-1 表示当前草稿，>=0 指向历史条目（0 为最新一条）
   let historyIndex = -1
   // 进入历史前的草稿快照：回退到草稿态时原样恢复
@@ -347,6 +352,8 @@ export default function Session() {
   let stickToBottom = true
   // 是否已滚到时间线末尾：只驱动右下角「滚到底」按钮的形态，不参与跟随判定
   const [atBottom, setAtBottom] = createSignal(true)
+  // 是否展开被折叠的历史问答：默认只看最后 COLLAPSED_QA_LIMIT 条，切换会话复位
+  const [showAllMessages, setShowAllMessages] = createSignal(false)
   // 容器内指针是否按下：按住拖动滚动条/选中文本时产生的滚动才算用户操作
   let pointerHeld = false
   // 触摸手势起点纵坐标：手指下移（内容上翻）才关闭跟随
@@ -1647,6 +1654,7 @@ export default function Session() {
         setMobilePanelOpen(false)
         setActiveQuestionId("")
         setHighlightedMessageId("")
+        setShowAllMessages(false)
         setWorkspaceInfo(undefined)
         if (highlightTimer) clearTimeout(highlightTimer)
         ensureEvents(wsId)
@@ -1685,6 +1693,37 @@ export default function Session() {
     for (const message of messages()) map.set(message.id, message)
     return map
   })
+
+  /**
+   * turnStarts
+   * 参数：无
+   * 核心流程：以「有正文的 user 消息」作为一问的起点（一次回答可能跨多条 assistant 消息），
+   *           返回这些消息在 messages 里的下标，供折叠定位与计数使用
+   */
+  const turnStarts = createMemo(() => {
+    const list = messages()
+    const starts: number[] = []
+    for (let index = 0; index < list.length; index++) {
+      const message = list[index]
+      if (message.role !== "user") continue
+      if (textOf(message).trim().length === 0) continue
+      starts.push(index)
+    }
+    return starts
+  })
+
+  /** 折叠起点：展开或问答数未超阈值时为 0；否则从倒数第 N 条问答的首条消息开始渲染 */
+  const collapsedFrom = createMemo(() => {
+    const starts = turnStarts()
+    if (showAllMessages() || starts.length <= COLLAPSED_QA_LIMIT) return 0
+    return starts[starts.length - COLLAPSED_QA_LIMIT]
+  })
+
+  /** 超出阈值的问答条数：折叠/展开两个方向的横幅共用，未超阈值时为 0 */
+  const overflowTurns = createMemo(() => Math.max(0, turnStarts().length - COLLAPSED_QA_LIMIT))
+
+  /** 实际渲染的消息 id：默认裁掉折叠起点之前的历史，展开后恢复全量 */
+  const visibleMessageIds = createMemo(() => messageIds().slice(collapsedFrom()))
 
   // 输入历史：本会话已发送的提问文本，最新在前、同文去重，供输入框 ↑/↓ 回溯
   const historyEntries = createMemo(() => {
@@ -1853,6 +1892,12 @@ export default function Session() {
     ),
   )
 
+  /** 折叠横幅占据的顶部高度：展开后横幅吸顶，跳转目标要避开它 */
+  function topInset() {
+    if (!showAllMessages()) return 0
+    return collapseBarRef?.offsetHeight ?? 0
+  }
+
   /**
    * jumpToMessage
    * 参数：messageId 目标消息 id
@@ -1863,6 +1908,10 @@ export default function Session() {
   function jumpToMessage(messageId: string) {
     const container = scrollRef
     if (!container) return
+
+    // 目标被折叠时先展开，否则虚拟列表里根本没有这一行，滚动会落空
+    const targetIndex = messages().findIndex((message) => message.id === messageId)
+    if (targetIndex >= 0 && targetIndex < collapsedFrom()) setShowAllMessages(true)
 
     stickToBottom = false
     setActiveQuestionId(messageId)
@@ -1882,12 +1931,35 @@ export default function Session() {
         if (attempt++ < 10) requestAnimationFrame(settle)
         return
       }
-      const delta = target.getBoundingClientRect().top - container.getBoundingClientRect().top - 16
+      const delta = target.getBoundingClientRect().top - container.getBoundingClientRect().top - 16 - topInset()
       if (Math.abs(delta) < 8) return
       container.scrollTo({ top: Math.max(0, container.scrollTop + delta), behavior: "auto" })
       if (attempt++ < 10) requestAnimationFrame(settle)
     }
     requestAnimationFrame(settle)
+  }
+
+  /**
+   * expandAllMessages
+   * 参数：无
+   * 核心流程：解除折叠并跳到刚展开的第一条历史消息 —— 贴底状态下只把内容塞到视口上方，
+   *           用户看不到任何变化，必须显式定位过去
+   */
+  function expandAllMessages() {
+    const boundaryId = messageIds()[collapsedFrom()]
+    setShowAllMessages(true)
+    if (boundaryId) requestAnimationFrame(() => jumpToMessage(boundaryId))
+  }
+
+  /**
+   * collapseMessages
+   * 参数：无
+   * 核心流程：重新折叠历史并回到末尾 —— 折叠后内容大幅收缩，停在原位置会落到时间线开头，
+   *           而收起的目的通常是回到最新一条
+   */
+  function collapseMessages() {
+    setShowAllMessages(false)
+    requestAnimationFrame(() => scrollToEnd())
   }
 
   const agentHint = () => {
@@ -2057,9 +2129,35 @@ export default function Session() {
                   <div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>
                 }>
                   <SubagentProvider store={subagentStore}>
+                    {/* 折叠横幅：默认只挂最后 COLLAPSED_QA_LIMIT 条问答，点开恢复全量并定位到展开边界；
+                        展开后变吸顶的「收起」条，往下读历史时不用滚回顶部才能收起 */}
+                    <Show when={overflowTurns() > 0}>
+                      <div
+                        ref={collapseBarRef}
+                        class="flex flex-col items-center gap-3 pb-4"
+                        classList={{ "sticky top-0 z-10 bg-base/95 pt-3 backdrop-blur": showAllMessages() }}
+                      >
+                        <button
+                          type="button"
+                          class="flex items-center gap-1.5 rounded-full border border-edge bg-raised/60 px-3 py-1.5 text-[12px] leading-4 text-muted transition-colors hover:border-accent/50 hover:text-text"
+                          aria-expanded={showAllMessages()}
+                          onClick={() => (showAllMessages() ? collapseMessages() : expandAllMessages())}
+                        >
+                          <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                            <path
+                              d={showAllMessages() ? "M4 5.5 8 9.5l4-4" : "M4 10.5 8 6.5l4 4"}
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                          {showAllMessages() ? `收起 · 只看最近 ${COLLAPSED_QA_LIMIT} 条` : `展开全部问答 · 还有 ${overflowTurns()} 条`}
+                        </button>
+                        <div class="h-px w-full bg-edge" />
+                      </div>
+                    </Show>
                     {/* 时间线虚拟化：仅挂载视口附近的卡片，其余用实测高度占位 */}
                     <VirtualTimeline
-                      items={messageIds()}
+                      items={visibleMessageIds()}
                       scroll={() => scrollRef}
                       pin={pinnedMessageId()}
                       stick={() => stickToBottom}
@@ -2076,7 +2174,7 @@ export default function Session() {
                         >
                           <Show when={messageById().get(id)}>
                             {(message) => (
-                              <MessageItem message={message()} showFinish={index() === messages().length - 1} />
+                              <MessageItem message={message()} showFinish={index() === visibleMessageIds().length - 1} />
                             )}
                           </Show>
                         </div>
