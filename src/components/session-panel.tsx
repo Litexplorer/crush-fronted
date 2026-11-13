@@ -1,21 +1,23 @@
 /**
  * session-panel.tsx
  * 参数：wsId workspace ID；sessionId 会话 ID（任一变化即重置文件树状态）
- * 核心流程：会话页右侧面板骨架 —— 顶部 Files / Review / Terminal 三个 tab；
+ * 核心流程：会话页右侧面板骨架 —— 顶部 Q&A / Files / Review / Terminal / System 五个 tab；
  *           Files：懒加载文件树（目录可展开/折叠、目录优先按名排序、
  *           人类可读大小、失败行内错误 + Retry、空目录 No files、超 200 条截断提示）；
  *           Review：变更文件列表 + 历史版本 unified diff（见 panel-review.tsx）；
  *           Terminal：命令执行与输出展示（见 panel-terminal.tsx）；
+ *           System：host 的 CPU / 内存 / 磁盘 / 网络瞬时监控（见 panel-system.tsx）；
  *           折叠与宽度由宿主（session.tsx）控制，本组件不持久化任何状态
  */
 import { createEffect, createSignal, For, Match, on, Show, Switch } from "solid-js"
 import { listWorkspaceFiles, type FileEntry } from "../lib/files"
 import QuestionIndex, { type QuestionItem } from "./panel-questions"
 import ReviewTab from "./panel-review"
+import SystemTab from "./panel-system"
 import TerminalTab from "./panel-terminal"
 
 /** 面板 tab 标识 */
-type PanelTab = "questions" | "files" | "review" | "terminal"
+type PanelTab = "questions" | "files" | "review" | "terminal" | "system"
 
 /** 目录条目截断上限：超过时只渲染前 200 条并提示 */
 const MAX_CHILDREN = 200
@@ -32,6 +34,7 @@ const PANEL_TABS: { id: PanelTab; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "review", label: "Review" },
   { id: "terminal", label: "Terminal" },
+  { id: "system", label: "System" },
 ]
 
 /**
@@ -143,6 +146,9 @@ export default function SessionPanel(props: {
         </Match>
         <Match when={tab() === "terminal"}>
           <TerminalTab wsId={props.wsId} sessionId={props.sessionId} />
+        </Match>
+        <Match when={tab() === "system"}>
+          <SystemTab />
         </Match>
       </Switch>
     </div>
