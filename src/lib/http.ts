@@ -19,15 +19,26 @@ type HttpMethod = "GET" | "POST" | "PUT" | "DELETE"
  */
 const REQUEST_TIMEOUT_MS = 20_000
 
+/** 单请求可覆盖超时：同步等待大模型生成的接口（如会话压缩）远超 20s */
+export interface RequestOptions {
+  timeoutMs?: number
+}
+
 /**
  * request
- * 参数：method HTTP 动词；path 以 / 开头的接口路径（相对 /v1）；body 可选 JSON 载荷
+ * 参数：method HTTP 动词；path 以 / 开头的接口路径（相对 /v1）；body 可选 JSON 载荷；
+ *       opts.timeoutMs 覆盖默认超时
  * 核心流程：拼接 /v1 前缀发起 fetch（带超时）→ 解析 JSON 响应 →
  *           非 2xx 抛 {message}，网络失败/超时抛降级文案
  */
-async function request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: HttpMethod,
+  path: string,
+  body?: unknown,
+  opts?: RequestOptions,
+): Promise<T> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? REQUEST_TIMEOUT_MS)
   try {
     let res: Response
     try {
@@ -67,8 +78,8 @@ export function httpGet<T>(path: string): Promise<T> {
   return request<T>("GET", path)
 }
 
-export function httpPost<T>(path: string, body: unknown): Promise<T> {
-  return request<T>("POST", path, body)
+export function httpPost<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
+  return request<T>("POST", path, body, opts)
 }
 
 export function httpPut<T>(path: string, body: unknown): Promise<T> {

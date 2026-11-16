@@ -9,6 +9,13 @@
  */
 import { httpGet, httpPost, httpPut } from "./http"
 
+/**
+ * COMPACT_TIMEOUT_MS
+ * 压缩接口的专用超时：compress 是同步等待大模型生成整段摘要，
+ * 线上实测 29~46s，用默认 20s 会先掐断请求再误报「请求超时，请重试」
+ */
+const COMPACT_TIMEOUT_MS = 10 * 60 * 1000
+
 /** 会话 todo 条目，对应 proto.Todo */
 export interface SessionTodo {
   content: string
@@ -132,5 +139,7 @@ export async function summarizeSession(wsId: string, sid: string): Promise<void>
   await httpPost(
     `/workspaces/${encodeURIComponent(wsId)}/agent/sessions/${encodeURIComponent(sid)}/summarize`,
     {},
+    // 压缩要把整段会话重新喂给大模型，线上实测 29~46s，默认 20s 必然误报「请求超时」
+    { timeoutMs: COMPACT_TIMEOUT_MS },
   )
 }
