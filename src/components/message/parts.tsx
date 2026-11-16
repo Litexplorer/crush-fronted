@@ -305,16 +305,6 @@ function defaultOpenTool(name: string, result?: ToolResultPartData): boolean {
 }
 
 /**
- * needsToolInput
- * 参数：name 工具名
- * 核心流程：这些工具的卡片需要调用参数才能渲染内容（diff / 代码 / 命令），
- *           结果卡也要从原始调用里回查 input；其余工具不需要
- */
-function needsToolInput(name: string): boolean {
-  return /^(edit|multiedit|bash|view)$/i.test(name)
-}
-
-/**
  * AssistantParts
  * 参数：message 消息（assistant/system/tool）
  * 核心流程：计算"最后一个未完成的 tool_call"作为唯一自动展开项；
@@ -443,17 +433,16 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const tr = data as ToolResultPartData
               // todos 由 Todo Dock 统一展示；agent 结果由上方 SubagentCard 跨消息合并，避免重复卡片
               if ((tr.name || "") === "todos" || isSubagentCall(tr.name)) return null
-              // 结果消息只带 tool_call_id：反查原始调用，edit/bash/view 卡片据此展示参数与内容
-              const origin = tr.tool_call_id ? subagent?.toolCalls().get(tr.tool_call_id) : undefined
-              const name = tr.name || origin?.name || "tool"
-              // edit 结果已合并进调用卡片：跳过独立结果卡，避免同一操作出现两张卡片
-              if (origin && defaultOpenTool(name, tr)) return null
+              // 能反查到原始调用就整条跳过：调用卡片已按 tool_call_id 跨消息合并了结果
+              // （后端每个 tool call 独立发一条结果消息），再画一张就是同一操作两张卡；
+              // 只有查不到调用（旧数据、调用消息未加载）时才让结果独立成卡
+              if (tr.tool_call_id && subagent?.toolCalls().get(tr.tool_call_id)) return null
+              const name = tr.name || "tool"
               const resultKey = `result:${index()}`
               const resultOpen = () => overrides()[resultKey] ?? defaultOpenTool(name, tr)
               return (
                 <ToolCard
                   name={name}
-                  inputRaw={needsToolInput(name) ? origin?.input : undefined}
                   finished={true}
                   result={tr}
                   open={resultOpen()}
@@ -578,7 +567,8 @@ function ReasoningBlock(props: { open: boolean; streaming: boolean; thinking: st
  */
 function ToolCard(props: {
   name: string
-  inputRaw: string | undefined
+  /** 原始调用参数：只有查不到对应 tool_call 的孤儿结果卡才为空 */
+  inputRaw?: string
   finished: boolean
   result?: ToolResultPartData
   open: boolean
