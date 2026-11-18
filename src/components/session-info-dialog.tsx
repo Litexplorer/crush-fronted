@@ -1,18 +1,19 @@
 /**
  * session-info-dialog.tsx
- * 参数：wsId 工作区 ID；session 当前会话；model 当前模型选择（含思考强度）；
- *       lastUsed 最近一次实际使用的模型；contextWindow 当前模型上下文窗口；
- *       onClose 关闭回调
- * 核心流程：打开时并行拉 LSP / MCP / Skills / 版本号 → 头部展示会话标题、模型与用量 →
+ * 参数：wsId 工作区 ID；session 当前会话；messages 当前会话全量消息（字符数统计）；
+ *       model 当前模型选择（含思考强度）；lastUsed 最近一次实际使用的模型；
+ *       contextWindow 当前模型上下文窗口；onClose 关闭回调
+ * 核心流程：打开时并行拉 LSP / MCP / Skills / 版本号 → 头部展示会话标题、模型与用量、字符数分项 →
  *           中部复用 InfoSections 分区展示 MCP / LSP / Skills → 页脚展示版本与刷新入口；
  *           Escape 或点击遮罩关闭，打开时焦点进入弹窗、关闭后还原原焦点
  */
-import { createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { SelectedModel } from "../lib/models"
-import type { Session } from "../lib/sessions"
+import type { Session, SessionMessage } from "../lib/sessions"
 import { listLsps, listMcp, listSkills, type LspState, type McpState, type SkillInfo } from "../lib/diagnostics"
 import { getVersion } from "../lib/version"
 import { formatTokens } from "../lib/usage"
+import { sessionChars } from "../lib/session-chars"
 import type { ApiError } from "../lib/http"
 import InfoSections from "./info-sections"
 
@@ -30,6 +31,7 @@ function titleCase(value: string | undefined): string {
 export default function SessionInfoDialog(props: {
   wsId: string
   session: Session | undefined
+  messages: SessionMessage[]
   model: SelectedModel | undefined
   lastUsed: { model: string; provider: string } | undefined
   contextWindow: number | undefined
@@ -136,6 +138,8 @@ export default function SessionInfoDialog(props: {
   const providerLabel = () => props.model?.provider || props.lastUsed?.provider || ""
   const reasoningLabel = () => titleCase(props.model?.reasoning_effort)
   const costLabel = () => `$${(props.session?.cost ?? 0).toFixed(2)}`
+  // 字符数分项：与 composer 工具条同一份逐消息缓存，打开弹窗不额外遍历分片
+  const chars = createMemo(() => sessionChars(props.messages))
 
   return (
     <div
@@ -181,6 +185,22 @@ export default function SessionInfoDialog(props: {
               </Show>
               <span class="text-faint">·</span>
               <span>{costLabel()}</span>
+            </div>
+            {/* 字符数：总计 + 正文/思考/工具分项，均为精确值（千分位） */}
+            <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+              <span class="text-text">{chars().total.toLocaleString()} 字符</span>
+              <span class="text-faint">·</span>
+              <span class="text-muted">用户 {chars().user.toLocaleString()}</span>
+              <span class="text-faint">·</span>
+              <span class="text-muted">助手 {chars().assistant.toLocaleString()}</span>
+              <Show when={chars().reasoning > 0}>
+                <span class="text-faint">·</span>
+                <span class="text-muted">思考 {chars().reasoning.toLocaleString()}</span>
+              </Show>
+              <Show when={chars().tool > 0}>
+                <span class="text-faint">·</span>
+                <span class="text-muted">工具 {chars().tool.toLocaleString()}</span>
+              </Show>
             </div>
           </div>
           <button

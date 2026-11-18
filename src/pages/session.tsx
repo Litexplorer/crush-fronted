@@ -13,7 +13,7 @@
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
-import { getSession, listMessages, renameSession, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
+import { getSession, listMessagesPage, renameSession, summarizeSession, type Session, type SessionMessage } from "../lib/sessions"
 import { cancel, getAgent, initAgent, newRunId, sendMessage, setCurrentSession } from "../lib/agent"
 import { closeEvents, ensureEvents, eventsConnection, onEventsOpen, subscribeEvents, type WorkspaceEvent } from "../lib/events"
 import { setSessionRunning } from "../lib/run-status"
@@ -29,6 +29,8 @@ import HashMention from "../components/hash-mention"
 import ModelSelect from "../components/model-select"
 import UsageMeter from "../components/usage-meter"
 import SessionInfoDialog from "../components/session-info-dialog"
+import { formatChars } from "../lib/usage"
+import { sessionChars } from "../lib/session-chars"
 import type { SelectedModel } from "../lib/models"
 import PermissionDock from "../components/permission-dock"
 import QuestionDock from "../components/question-dock"
@@ -79,6 +81,22 @@ const TODOS_COLLAPSED_KEY = "crush.todos.collapsed"
 /** 图片附件：单条上限与数量上限（base64 会进入会话历史与 SSE，需限制体积） */
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_IMAGES = 4
+
+/**
+ * MESSAGES_PAGE_SIZE
+ * 首屏只拉最近这么多条消息。大会话一次全量拉取要传几十 MB 的工具输出，
+ * 剩下 84% 的体积对首屏毫无价值；更早的历史在滚到顶部时再翻页。
+ */
+const MESSAGES_PAGE_SIZE = 120
+
+/** 已加载的消息缓存：切回看过的会话先用缓存秒开，再拉最新一页补齐新增 */
+interface CachedMessages {
+  messages: ChatMessage[]
+  hasMore: boolean
+}
+const messageCache = new Map<string, CachedMessages>()
+/** 缓存上限：保留最近访问的若干个会话，超出淘汰最早写入的 */
+const MESSAGE_CACHE_LIMIT = 20
 
 /** 已粘贴/拖入的图片：base64 为发送用内容，previewUrl 为本地缩略图 */
 interface ImageAttachment {
@@ -138,6 +156,20 @@ function errorMessage(err: unknown): string {
  */
 function byCreatedAt(a: SessionMessage, b: SessionMessage): number {
   return a.created_at - b.created_at
+}
+
+/**
+ * mergeMessages
+ * 参数：kept 已加载的旧消息（缓存或上一页）；fresh 新拉到的一页消息
+ * 核心流程：按 id 合并（新拉到的覆盖旧的，保证流式分片是最新状态）→ 按时间升序稳定排序，
+ *           分页翻回来的历史与首屏尾部消息不会重复渲染
+ */
+function mergeMessages(kept: ChatMessage[], fresh: ChatMessage[]): ChatMessage[] {
+  if (kept.length === 0) return fresh
+  const byId = new Map<string, ChatMessage>()
+  for (const message of kept) byId.set(message.id, message)
+  for (const message of fresh) byId.set(message.id, message)
+  return [...byId.values()].sort(byCreatedAt)
 }
 
 /**
@@ -228,6 +260,28 @@ function persistTodosCollapsed(collapsed: boolean) {
   }
 }
 
+/**
+ * MessagesSkeleton
+ * 参数：无
+ * 核心流程：消息加载期的时间线骨架 —— 三条渐隐占位行，避免用 "Empty session"
+ *           把「正在加载」误报成「没有消息」
+ */
+function MessagesSkeleton() {
+  return (
+    <div class="flex flex-col gap-4 py-2" aria-hidden="true">
+      <For each={[0, 1, 2]}>
+        {(row) => (
+          <div class="flex flex-col gap-2">
+            <div class="h-3 animate-pulse rounded bg-raised" style={{ width: `${58 - row * 8}%` }} />
+            <div class="h-3 animate-pulse rounded bg-raised" style={{ width: `${82 - row * 6}%` }} />
+            <div class="h-3 animate-pulse rounded bg-raised" style={{ width: `${40 + row * 6}%` }} />
+          </div>
+        )}
+      </For>
+    </div>
+  )
+}
+
 export default function Session() {
   const params = useParams<{ workspaceId: string; sessionId: string }>()
   const navigate = useNavigate()
@@ -238,6 +292,15 @@ export default function Session() {
   const [workspaceInfo, setWorkspaceInfo] = createSignal<Workspace>()
 
   const [messages, setMessages] = createSignal<ChatMessage[]>([])
+  // 消息加载态：loading 期间显示骨架，只有 ready 且确实为空才允许渲染 Empty session
+  const [messagesState, setMessagesState] = createSignal<"loading" | "ready">("loading")
+  // 是否还有更早的历史（后端 X-Has-More），决定顶部「加载更早」入口是否出现
+  const [hasMoreMessages, setHasMoreMessages] = createSignal(false)
+  const [loadingOlder, setLoadingOlder] = createSignal(false)
+  // 当前消息列表属于哪个会话：缓存写入按它归类，避免切换瞬间把旧列表写进新会话
+  let messagesOwner = ""
+  // 会话切换时取消上一个未完成的整页请求，避免多个几十 MB 的响应抢占连接
+  let messagesAbort: AbortController | undefined
   const [busy, setBusy] = createSignal(false)
   // 本地 busy 同步到全局运行表：点发送后标签栏立刻出现运行图标，不必等 SSE。
   // 必须以「已加载的 session」为准：路由参数在请求返回前就变了，
@@ -550,23 +613,96 @@ export default function Session() {
   /**
    * loadMessages
    * 参数：wsId workspace ID；sid 会话 ID
-   * 核心流程：GET /sessions/{sid}/messages → 按 created_at 升序写入本地列表；
-   *           首次加载强制贴底滚动；失败不阻塞页面（会话骨架已有独立错误态）
+   * 核心流程：取消上一个会话未完成的请求 → 有缓存先渲染（切回秒开）→ 拉最近一页 →
+   *           与缓存按 id 合并 → 记录是否还有更早历史；失败保留缓存并等 SSE 补齐
    */
   async function loadMessages(wsId: string, sid: string) {
-    setMessages([])
+    messagesAbort?.abort()
+    const controller = new AbortController()
+    messagesAbort = controller
+    const key = `${wsId}/${sid}`
+    const cached = messageCache.get(key)
+    // 先切归属再写列表：缓存 effect 据此把消息写回正确的会话
+    messagesOwner = key
+    setHasMoreMessages(cached?.hasMore ?? true)
+    setLoadingOlder(false)
+    if (cached && cached.messages.length > 0) {
+      setMessages(cached.messages)
+      setMessagesState("ready")
+      stickToBottom = true
+    } else {
+      setMessages([])
+      setMessagesState("loading")
+    }
     try {
-      const data = await listMessages(wsId, sid)
+      const page = await listMessagesPage(wsId, sid, { limit: MESSAGES_PAGE_SIZE, signal: controller.signal })
       if (params.sessionId !== sid) return
-      const sorted = [...data].sort(byCreatedAt)
-      setMessages(sorted)
+      const merged = mergeMessages(cached?.messages ?? [], page.messages)
+      setMessages(merged)
+      setMessagesState("ready")
+      // 缓存里已有完整历史时不必再提示「加载更早」
+      setHasMoreMessages(page.hasMore && (cached?.hasMore ?? true))
+      messageCache.set(key, { messages: merged, hasMore: page.hasMore && (cached?.hasMore ?? true) })
       // 历史里可能已有子 agent 调用：登记 child session id，后续 SSE 事件才能路由
-      for (const message of sorted) registerAgentCalls(message)
+      for (const message of merged) registerAgentCalls(message)
       stickToBottom = true
     } catch {
+      if (controller.signal.aborted) return
       // 消息加载失败：本阶段不加额外失败 UI，等待 SSE upsert 补齐
+      setMessagesState("ready")
     }
   }
+
+  /**
+   * loadOlderMessages
+   * 参数：无（读取当前会话已加载的第一条消息作为游标）
+   * 核心流程：向上翻页 → 与新消息合并 → 保持视口位置（记录前后 scrollHeight 差补 scrollTop）
+   */
+  async function loadOlderMessages() {
+    const wsId = params.workspaceId
+    const sid = params.sessionId
+    const list = messages()
+    if (!wsId || !sid || list.length === 0 || loadingOlder() || !hasMoreMessages()) return
+    setLoadingOlder(true)
+    const el = scrollRef
+    const beforeHeight = el?.scrollHeight ?? 0
+    const beforeTop = el?.scrollTop ?? 0
+    try {
+      const page = await listMessagesPage(wsId, sid, { limit: MESSAGES_PAGE_SIZE, before: list[0].id })
+      if (params.sessionId !== sid) return
+      const merged = mergeMessages(list, page.messages)
+      setMessages(merged)
+      setHasMoreMessages(page.hasMore)
+      messageCache.set(`${wsId}/${sid}`, { messages: merged, hasMore: page.hasMore })
+      for (const message of page.messages) registerAgentCalls(message)
+      // 顶部插入后内容整体下移，按高度差回补滚动位置，避免视口跳走
+      if (el) {
+        requestAnimationFrame(() => {
+          el.scrollTop = beforeTop + Math.max(0, el.scrollHeight - beforeHeight)
+        })
+      }
+    } catch {
+      // 翻页失败保留现状，用户可再次触发
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  // 消息列表变化即写回缓存：SSE 增量、乐观插入、删除都走这一条路径，
+  // 调用点不必各自维护缓存；owner 在切换会话时先更新，避免旧列表串到新会话
+  createEffect(() => {
+    const list = messages()
+    const owner = messagesOwner
+    if (!owner) return
+    const entry = messageCache.get(owner)
+    messageCache.set(owner, { messages: list, hasMore: entry?.hasMore ?? hasMoreMessages() })
+    // 缓存按插入顺序淘汰最老的会话，避免长时间使用后常驻过多消息体
+    while (messageCache.size > MESSAGE_CACHE_LIMIT) {
+      const oldest = messageCache.keys().next().value
+      if (oldest === undefined || oldest === owner) break
+      messageCache.delete(oldest)
+    }
+  })
 
   /**
    * ensureAgentReady
@@ -784,6 +920,9 @@ export default function Session() {
     }
     return map
   })
+
+  /** 会话字符数：全量消息按 WeakMap 缓存累计，SSE 增量只重算变动消息 */
+  const charStats = createMemo(() => sessionChars(messages()))
 
   /** 后台子 agent 回执表：sub_agent_report 分片挂在父会话的用户消息上，按 label 索引 */
   const subagentReports = createMemo(() => {
@@ -1486,6 +1625,8 @@ export default function Session() {
     scheduleQuestionSync()
     // 按钮形态只认几何距离：程序化滚动和用户滚动都要跟着变，与跟随开关无关
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+    // 展开全部后滚到顶部附近：拉下一段更早的历史（分页游标是当前第一条消息）
+    if (showAllMessages() && el.scrollTop < 200) void loadOlderMessages()
     if (!pointerHeld) return
     stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
   }
@@ -2126,9 +2267,28 @@ export default function Session() {
             >
               <div class="mx-auto flex w-full max-w-[1000px] flex-col px-3 py-4 md:px-4 md:py-5">
                 <Show when={messages().length > 0} fallback={
-                  <div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>
+                  // 加载中显示骨架；只有确认加载完成且确实没有消息才显示空会话
+                  <Show
+                    when={messagesState() === "loading"}
+                    fallback={<div class="py-10 text-center text-[13px] leading-5 text-faint">Empty session</div>}
+                  >
+                    <MessagesSkeleton />
+                  </Show>
                 }>
                   <SubagentProvider store={subagentStore}>
+                    {/* 更早历史：首屏只拉最近一页，展开全部后滚到顶部或点这里继续翻页 */}
+                    <Show when={hasMoreMessages()}>
+                      <div class="flex justify-center pb-3">
+                        <button
+                          type="button"
+                          class="flex items-center gap-1.5 rounded-full border border-edge bg-raised/60 px-3 py-1.5 text-[12px] leading-4 text-muted transition-colors hover:border-accent/50 hover:text-text disabled:opacity-60"
+                          disabled={loadingOlder()}
+                          onClick={() => void loadOlderMessages()}
+                        >
+                          {loadingOlder() ? "加载更早的消息…" : "加载更早的消息"}
+                        </button>
+                      </div>
+                    </Show>
                     {/* 折叠横幅：默认只挂最后 COLLAPSED_QA_LIMIT 条问答，点开恢复全量并定位到展开边界；
                         展开后变吸顶的「收起」条，往下读历史时不用滚回顶部才能收起 */}
                     <Show when={overflowTurns() > 0}>
@@ -2488,6 +2648,13 @@ export default function Session() {
                         contextWindow={modelContextWindow()}
                       />
                     </div>
+                    {/* 会话字符数：全量消息累计，hover 查看分项与精确值 */}
+                    <span
+                      class="shrink-0 cursor-default truncate px-1 text-[11px] tabular-nums text-faint max-md:hidden"
+                      title={`用户 ${charStats().user.toLocaleString()} · 助手 ${charStats().assistant.toLocaleString()} · 思考 ${charStats().reasoning.toLocaleString()} · 工具 ${charStats().tool.toLocaleString()}`}
+                    >
+                      {formatChars(charStats().total)} 字符
+                    </span>
                     <Show
                       when={busy()}
                       fallback={
@@ -2592,6 +2759,7 @@ export default function Session() {
         <SessionInfoDialog
           wsId={params.workspaceId}
           session={session()}
+          messages={messages()}
           model={modelSelection()}
           lastUsed={lastUsedModel()}
           contextWindow={modelContextWindow()}

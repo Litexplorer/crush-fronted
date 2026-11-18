@@ -6,8 +6,9 @@
  *           getSession     GET  /workspaces/{id}/sessions/{sid}
  *           renameSession  PUT  /workspaces/{id}/sessions/{sid}/title
  *           listMessages   GET  /workspaces/{id}/sessions/{sid}/messages
+ *           listMessagesPage 同接口的 limit/before 分页版（X-Has-More 标记还有更早历史）
  */
-import { httpGet, httpPost, httpPut } from "./http"
+import { httpGet, httpGetResult, httpPost, httpPut } from "./http"
 
 /**
  * COMPACT_TIMEOUT_MS
@@ -127,6 +128,38 @@ export async function listMessages(wsId: string, sid: string): Promise<SessionMe
     `/workspaces/${encodeURIComponent(wsId)}/sessions/${encodeURIComponent(sid)}/messages`,
   )
   return data ?? []
+}
+
+/** 分页参数：limit 取多少条，before 从哪条消息往前翻（空表示最新一页） */
+export interface MessagePageOptions {
+  limit: number
+  before?: string
+  signal?: AbortSignal
+}
+
+/** 一页消息 + 是否还有更早的历史（后端用 X-Has-More 响应头标记） */
+export interface MessagePage {
+  messages: SessionMessage[]
+  hasMore: boolean
+}
+
+/**
+ * listMessagesPage
+ * 参数：wsId workspace ID；sid 会话 ID；opts.limit 页大小；opts.before 游标消息 ID；opts.signal 取消
+ * 核心流程：GET .../messages?limit=&before= → 读 X-Has-More 判断是否还有更早的历史，
+ *           避免一次把几十 MB 的工具输出全量拉到前端
+ */
+export async function listMessagesPage(wsId: string, sid: string, opts: MessagePageOptions): Promise<MessagePage> {
+  const query = new URLSearchParams({ limit: String(opts.limit) })
+  if (opts.before) query.set("before", opts.before)
+  const result = await httpGetResult<SessionMessage[] | null>(
+    `/workspaces/${encodeURIComponent(wsId)}/sessions/${encodeURIComponent(sid)}/messages?${query.toString()}`,
+    { signal: opts.signal },
+  )
+  return {
+    messages: result.data ?? [],
+    hasMore: result.headers.get("X-Has-More") === "true",
+  }
 }
 
 /**
