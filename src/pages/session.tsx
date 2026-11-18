@@ -89,6 +89,13 @@ const MAX_IMAGES = 4
  */
 const MESSAGES_PAGE_SIZE = 120
 
+/**
+ * ALL_MESSAGES_PAGE_SIZE
+ * 「加载全部消息」的页大小：与后端 limit 上限一致，一次拿满，
+ * 几千条消息也只需几次请求，但不会把单次响应重新推到几十 MB。
+ */
+const ALL_MESSAGES_PAGE_SIZE = 1000
+
 /** 已加载的消息缓存：切回看过的会话先用缓存秒开，再拉最新一页补齐新增 */
 interface CachedMessages {
   messages: ChatMessage[]
@@ -297,6 +304,8 @@ export default function Session() {
   // 是否还有更早的历史（后端 X-Has-More），决定顶部「加载更早」入口是否出现
   const [hasMoreMessages, setHasMoreMessages] = createSignal(false)
   const [loadingOlder, setLoadingOlder] = createSignal(false)
+  // 「加载全部消息」进行中：逐页拉取直到没有更早的历史
+  const [loadingAll, setLoadingAll] = createSignal(false)
   // 当前消息列表属于哪个会话：缓存写入按它归类，避免切换瞬间把旧列表写进新会话
   let messagesOwner = ""
   // 会话切换时取消上一个未完成的整页请求，避免多个几十 MB 的响应抢占连接
@@ -685,6 +694,50 @@ export default function Session() {
       // 翻页失败保留现状，用户可再次触发
     } finally {
       setLoadingOlder(false)
+    }
+  }
+
+  /**
+   * loadAllMessages
+   * 参数：无（以当前已加载的第一条消息为游标，一直翻到最老一页）
+   * 核心流程：按最大页大小循环调分页接口 → 逐页合并并刷新进度 → 每页插到顶部后按高度差
+   *           回补滚动位置 → hasMore 为 false 时把缓存标记为完整；中断后已加载部分保留，可再点继续
+   */
+  async function loadAllMessages() {
+    const wsId = params.workspaceId
+    const sid = params.sessionId
+    let merged = messages()
+    if (!wsId || !sid || merged.length === 0 || loadingAll() || loadingOlder() || !hasMoreMessages()) return
+    setLoadingAll(true)
+    const el = scrollRef
+    try {
+      for (;;) {
+        const beforeHeight = el?.scrollHeight ?? 0
+        const beforeTop = el?.scrollTop ?? 0
+        const page = await listMessagesPage(wsId, sid, {
+          limit: ALL_MESSAGES_PAGE_SIZE,
+          before: merged[0]?.id,
+        })
+        if (params.sessionId !== sid) return
+        // 空页意味着游标已经失效，停止以免死循环
+        if (page.messages.length === 0) break
+        merged = mergeMessages(merged, page.messages)
+        setMessages(merged)
+        for (const message of page.messages) registerAgentCalls(message)
+        // 顶部插入后内容整体下移，按高度差回补滚动位置
+        if (el) {
+          requestAnimationFrame(() => {
+            el.scrollTop = beforeTop + Math.max(0, el.scrollHeight - beforeHeight)
+          })
+        }
+        if (!page.hasMore) break
+      }
+      setHasMoreMessages(false)
+      messageCache.set(`${wsId}/${sid}`, { messages: merged, hasMore: false })
+    } catch {
+      // 中途失败保留已加载的部分，按钮可再次点击继续
+    } finally {
+      setLoadingAll(false)
     }
   }
 
@@ -2276,16 +2329,27 @@ export default function Session() {
                   </Show>
                 }>
                   <SubagentProvider store={subagentStore}>
-                    {/* 更早历史：首屏只拉最近一页，展开全部后滚到顶部或点这里继续翻页 */}
+                    {/* 更早历史：首屏只拉最近一页；可逐页加载，也可一次拉到最老一页 */}
                     <Show when={hasMoreMessages()}>
-                      <div class="flex justify-center pb-3">
+                      <div class="flex flex-wrap justify-center gap-2 pb-3">
                         <button
                           type="button"
                           class="flex items-center gap-1.5 rounded-full border border-edge bg-raised/60 px-3 py-1.5 text-[12px] leading-4 text-muted transition-colors hover:border-accent/50 hover:text-text disabled:opacity-60"
-                          disabled={loadingOlder()}
+                          disabled={loadingOlder() || loadingAll()}
                           onClick={() => void loadOlderMessages()}
                         >
                           {loadingOlder() ? "加载更早的消息…" : "加载更早的消息"}
+                        </button>
+                        <button
+                          type="button"
+                          title="一次加载全部历史消息"
+                          class="flex items-center gap-1.5 rounded-full border border-edge bg-raised/60 px-3 py-1.5 text-[12px] leading-4 text-muted transition-colors hover:border-accent/50 hover:text-text disabled:opacity-60"
+                          disabled={loadingAll() || loadingOlder()}
+                          onClick={() => void loadAllMessages()}
+                        >
+                          {loadingAll()
+                            ? `加载中 ${messages().length}${session()?.message_count ? `/${session()!.message_count}` : ""}`
+                            : "加载全部消息"}
                         </button>
                       </div>
                     </Show>
