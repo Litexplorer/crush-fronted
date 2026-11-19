@@ -2442,7 +2442,7 @@ export default function Session() {
             </div>
 
             {/* 输入区：固定底部，错误条 + 输入框容器（圆角 12px、最小高 96px、最大宽 1000px 居中） */}
-            <div class="shrink-0 px-2 pt-1 pb-2 md:px-3 md:pb-3 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+            <div class="shrink-0 px-2 pt-1 pb-2 md:px-3 md:pb-3 max-md:pb-[calc(0.875rem+env(safe-area-inset-bottom))]">
               <Show when={sendError()}>
                 <div class="mx-auto mb-2 max-w-[1000px] rounded-[8px] border border-[#e5484d]/40 bg-[#e5484d]/10 px-3 py-2 text-[12px] leading-4 text-[#e5484d]">
                   {sendError()}
@@ -2535,7 +2535,7 @@ export default function Session() {
                 </Show>
                 {/* opencode 版式 Composer：rounded-xl、min-h 96px、pt 12px；底部行 = 左侧 + / 模型选择器，右侧圆形发送 */}
                 <div
-                  class="relative flex min-h-[96px] flex-col rounded-xl border border-edge bg-deep pt-3 transition-colors focus-within:border-edge-strong"
+                  class="relative flex min-h-[96px] flex-col rounded-xl border border-edge bg-deep pt-3 transition-colors focus-within:border-edge-strong max-md:min-h-[108px]"
                   onPaste={handleComposerPaste}
                   onDragOver={handleComposerDragOver}
                   onDrop={handleComposerDrop}
@@ -2672,10 +2672,10 @@ export default function Session() {
                     disabled={agentState() !== "ready"}
                     placeholder="现在帮我"
                     rows={1}
-                    class="block max-h-[240px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-2 text-[16px] leading-6 text-text outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50 md:text-[13px] md:leading-5"
+                    class="block max-h-[240px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-2 text-[16px] leading-6 text-text outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50 md:text-[13px] md:leading-5 max-md:pb-2.5"
                   />
-                  <div class="flex h-11 shrink-0 items-center gap-1 px-2">
-                    <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <div class="flex h-11 shrink-0 items-center gap-1 px-2 max-md:min-h-[3.25rem] max-md:gap-1.5 max-md:px-2.5 max-md:pb-0.5">
+                    <div class="flex min-w-0 flex-1 items-center gap-1 max-md:gap-1.5">
                       {/* + 按钮：打开 @ 文件选择浮层 */}
                       <button
                         type="button"

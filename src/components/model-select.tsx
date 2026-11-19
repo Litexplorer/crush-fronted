@@ -377,14 +377,14 @@ export default function ModelSelect(props: {
         type="button"
         aria-label="Choose model"
         title={`${providerLabel()} · ${modelLabel()}`}
-        class="flex max-w-[340px] items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-text"
+        class="flex min-w-0 max-w-[340px] items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-text max-md:max-w-full max-md:px-1.5 max-md:text-[11px]"
         onClick={toggleOpen}
       >
         <Show when={providerLabel()}>
-          <span class="shrink-0 text-faint">{providerLabel()}</span>
-          <span class="shrink-0 text-faint/70">·</span>
+          <span class="max-w-[45%] shrink-0 truncate text-faint max-md:hidden">{providerLabel()}</span>
+          <span class="shrink-0 text-faint/70 max-md:hidden">·</span>
         </Show>
-        <span class="truncate text-text">{modelLabel()}</span>
+        <span class="min-w-0 flex-1 truncate text-text">{modelLabel()}</span>
         <Show when={pending()} fallback={
           <svg viewBox="0 0 12 12" class="size-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M2.5 4.5 6 8l3.5-3.5" stroke-linecap="round" stroke-linejoin="round" />

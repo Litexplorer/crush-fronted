@@ -258,9 +258,9 @@ export default function UsageMeter(props: {
   })
 
   return (
-    <div class="flex shrink-0 items-center gap-2 text-[11px] leading-none tabular-nums text-faint">
+    <div class="flex min-w-0 shrink-0 items-center gap-2 text-[11px] leading-none tabular-nums text-faint max-md:gap-1.5">
       <Show when={rateLabel()}>
-        <span class="whitespace-nowrap text-muted" title={rateTitle()}>
+        <span class="whitespace-nowrap text-muted max-md:hidden" title={rateTitle()}>
           {rateLabel()}
         </span>
       </Show>
@@ -292,7 +292,7 @@ export default function UsageMeter(props: {
       </Show>
       <Show when={cacheRate() !== undefined}>
         <span
-          class="flex items-center gap-1 whitespace-nowrap text-muted"
+          class="flex items-center gap-1 whitespace-nowrap text-muted max-md:gap-0.5"
           title={cacheTitle()}
           aria-label={`Prompt cache hit rate ${formatPercent(cacheRate() ?? 0)}`}
         >
