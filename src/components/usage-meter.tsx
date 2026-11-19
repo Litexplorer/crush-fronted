@@ -291,8 +291,17 @@ export default function UsageMeter(props: {
         </span>
       </Show>
       <Show when={cacheRate() !== undefined}>
-        <span class="whitespace-nowrap text-muted" title={cacheTitle()} aria-label={`Prompt cache hit rate ${formatPercent(cacheRate() ?? 0)}`}>
-          cache {formatPercent(cacheRate() ?? 0)}
+        <span
+          class="flex items-center gap-1 whitespace-nowrap text-muted"
+          title={cacheTitle()}
+          aria-label={`Prompt cache hit rate ${formatPercent(cacheRate() ?? 0)}`}
+        >
+          <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M8 2.6 13.4 5.4 8 8.2 2.6 5.4 8 2.6Z" stroke-linejoin="round" />
+            <path d="M2.6 7.9 8 10.7l5.4-2.8" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M2.6 10.3 8 13.1l5.4-2.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          {formatPercent(cacheRate() ?? 0)}
         </span>
       </Show>
     </div>
