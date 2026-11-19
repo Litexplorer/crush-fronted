@@ -6,6 +6,7 @@
  *           countChars    按 Unicode 码点计字符数（emoji 记 1）
  *           formatTokens  1.2K / 34K / 1.2M 紧凑格式
  *           formatChars   字符数同款紧凑格式
+ *           formatCachePercent 缓存命中率按接近 100% 的程度逐级放大精度
  */
 
 /**
@@ -97,10 +98,18 @@ export function cacheHitRate(hit?: number, miss?: number): number | undefined {
 }
 
 /**
- * formatPercent
- * 参数：value 0-100 的百分比
- * 核心流程：固定两位小数，输出 87.36% / 92.00%
+ * formatCachePercent
+ * 参数：value 0-100 的缓存命中率
+ * 核心流程：越接近 100% 越放大精度 —— 基准两位小数，≥99.9 三位、≥99.99 四位，以此类推（上限六位）；
+ *           正好 100% 直接输出 100%，不然会被 toFixed 抹成看不出差距的 100.00%
  */
-export function formatPercent(value: number): string {
-  return `${value.toFixed(2)}%`
+export function formatCachePercent(value: number): string {
+  if (!Number.isFinite(value)) return "0.00%"
+  if (value >= 100) return "100%"
+  let decimals = 2
+  // 每多一个 9 就多一位小数：99.9 → 3 位，99.99 → 4 位，99.999 → 5 位
+  while (decimals < 6 && value >= 100 - 10 ** -(decimals - 1)) decimals++
+  // 动作：按阈值精度格式化后剥掉无意义的尾零（至少留两位）→ 结果：99.9900 显示 99.99%，99.989 保持 99.989%
+  const [int, frac = ""] = Math.max(0, value).toFixed(decimals).split(".")
+  return `${int}.${frac.replace(/0+$/, "").padEnd(2, "0")}%`
 }

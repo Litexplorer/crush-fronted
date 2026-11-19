@@ -10,7 +10,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { Session } from "../lib/sessions"
 import type { FinishPartData, TimelineMessage } from "./message/parts"
-import { approxTokens, formatTokens, tokenRate, cacheHitRate, formatPercent } from "../lib/usage"
+import { approxTokens, formatTokens, tokenRate, cacheHitRate, formatCachePercent } from "../lib/usage"
 
 /** 与 internal/ui/common/rate.go 保持一致的采样参数 */
 const RATE_WINDOW = 1000
@@ -294,14 +294,14 @@ export default function UsageMeter(props: {
         <span
           class="flex items-center gap-1 whitespace-nowrap text-muted max-md:gap-0.5"
           title={cacheTitle()}
-          aria-label={`Prompt cache hit rate ${formatPercent(cacheRate() ?? 0)}`}
+          aria-label={`Prompt cache hit rate ${formatCachePercent(cacheRate() ?? 0)}`}
         >
           <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="M8 2.6 13.4 5.4 8 8.2 2.6 5.4 8 2.6Z" stroke-linejoin="round" />
             <path d="M2.6 7.9 8 10.7l5.4-2.8" stroke-linecap="round" stroke-linejoin="round" />
             <path d="M2.6 10.3 8 13.1l5.4-2.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
-          {formatPercent(cacheRate() ?? 0)}
+          {formatCachePercent(cacheRate() ?? 0)}
         </span>
       </Show>
     </div>

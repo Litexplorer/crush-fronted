@@ -12,7 +12,7 @@ import type { SelectedModel } from "../lib/models"
 import type { Session, SessionMessage } from "../lib/sessions"
 import { listLsps, listMcp, listSkills, type LspState, type McpState, type SkillInfo } from "../lib/diagnostics"
 import { getVersion } from "../lib/version"
-import { formatTokens, cacheHitRate, formatPercent } from "../lib/usage"
+import { formatTokens, cacheHitRate, formatCachePercent } from "../lib/usage"
 import { sessionChars } from "../lib/session-chars"
 import type { ApiError } from "../lib/http"
 import InfoSections from "./info-sections"
@@ -218,7 +218,7 @@ export default function SessionInfoDialog(props: {
               <Show when={cacheStats()} fallback={<span class="text-faint">缓存 —</span>}>
                 {(stats) => (
                   <>
-                    <span class="text-text">缓存命中 {formatPercent(stats().rate)}</span>
+                    <span class="text-text">缓存命中 {formatCachePercent(stats().rate)}</span>
                     <span class="text-faint">·</span>
                     <span class="text-muted">命中 {formatTokens(stats().read)}</span>
                     <span class="text-faint">·</span>
