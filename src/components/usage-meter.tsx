@@ -218,8 +218,11 @@ export default function UsageMeter(props: {
   const rateLabel = createMemo(() => {
     const rate = streamingMessage() ? liveRate() : finalRate()
     if (rate === undefined) return ""
+    // 动作：取整后为 0 的速率直接不给文案 → 结果：空闲或刚起步时不再显示 "~0 tok/s" 这类噪音
+    const rounded = Math.round(rate)
+    if (rounded <= 0) return ""
     const prefix = streamingMessage() ? "~" : ""
-    return `${prefix}${Math.round(rate)} tok/s`
+    return `${prefix}${rounded} tok/s`
   })
 
   const rateTitle = createMemo(() =>
@@ -258,9 +261,9 @@ export default function UsageMeter(props: {
   })
 
   return (
-    <div class="flex min-w-0 shrink-0 items-center gap-2 text-[11px] leading-none tabular-nums text-faint max-md:gap-1.5">
+    <div class="flex min-w-0 shrink-0 items-center gap-2 text-[11px] leading-none tabular-nums text-faint max-md:min-w-[100px] max-md:shrink max-md:flex-wrap max-md:justify-end max-md:gap-x-1.5 max-md:gap-y-1">
       <Show when={rateLabel()}>
-        <span class="whitespace-nowrap text-muted max-md:hidden" title={rateTitle()}>
+        <span class="whitespace-nowrap text-muted max-md:text-[10px]" title={rateTitle()}>
           {rateLabel()}
         </span>
       </Show>

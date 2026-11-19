@@ -377,7 +377,7 @@ export default function ModelSelect(props: {
         type="button"
         aria-label="Choose model"
         title={`${providerLabel()} · ${modelLabel()}`}
-        class="flex min-w-0 max-w-[340px] items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-text max-md:max-w-full max-md:px-1.5 max-md:text-[11px]"
+        class="flex min-w-0 max-w-[340px] items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-text max-md:min-w-[84px] max-md:max-w-full max-md:px-1.5 max-md:text-[11px]"
         onClick={toggleOpen}
       >
         <Show when={providerLabel()}>
