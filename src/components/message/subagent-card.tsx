@@ -28,6 +28,7 @@ import { useSubagentStore } from "./subagent-context"
 import { formatJson, toolIcon, toolSummary } from "./tool-visuals"
 import { parseViewMedia, ViewMedia } from "./view-code"
 import { partText, type ToolCallPartData, type ToolResultPartData } from "./parts"
+import UsageMeter from "../usage-meter"
 
 interface SubagentCardProps {
   messageId: string
@@ -352,7 +353,7 @@ export default function SubagentCard(props: SubagentCardProps) {
             </section>
           </Show>
 
-          <Show when={modelLabel() || usageLabel()}>
+          <Show when={modelLabel() || usageLabel() || childSession()}>
             <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-edge pt-2 text-[10px] text-faint">
               <Show when={modelLabel()}>
                 <span class="min-w-0 truncate">{modelLabel()}</span>
@@ -360,8 +361,23 @@ export default function SubagentCard(props: SubagentCardProps) {
               <Show when={usageLabel()}>
                 <span class="tabular-nums">{usageLabel()}</span>
               </Show>
+              {/* 动作：复用主编排器同一套用量组件 → 结果：子 agent 也有 tok/s 与缓存命中率，口径与主会话一致 */}
+              <UsageMeter session={childSession()} messages={childMessages()} busy={running()} />
             </div>
           </Show>
+
+          {/* 动作：展开区底部给一个收起入口 → 结果：长卡片不用滚回顶部找三角 */}
+          <button
+            type="button"
+            class="mt-2 flex w-full items-center justify-center gap-1 rounded-[6px] border border-edge/70 py-1 text-[11px] text-faint transition-colors hover:bg-raised/60 hover:text-text"
+            aria-label="Collapse sub-agent"
+            onClick={toggle}
+          >
+            <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="m4 10 4-4 4 4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            收起
+          </button>
         </div>
       </Show>
     </div>
