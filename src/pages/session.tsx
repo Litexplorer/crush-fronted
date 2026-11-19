@@ -1303,6 +1303,9 @@ export default function Session() {
               prompt_tokens: s.prompt_tokens,
               completion_tokens: s.completion_tokens,
               total_tokens: s.total_tokens,
+              cache_read_tokens: s.cache_read_tokens,
+              cache_write_tokens: s.cache_write_tokens,
+              uncached_input_tokens: s.uncached_input_tokens,
               cost: s.cost,
             }
           : prev,
