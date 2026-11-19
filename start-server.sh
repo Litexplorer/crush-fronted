@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # my-crush server 启停脚本：start | stop | restart | status
-# workspace 在 SSE 断开后保留 1800s（默认 10s）
+# workspace 在 SSE 断开后保留 604800s（7 天）；空闲也 7 天后才自我退出
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -10,8 +10,9 @@ ADDR="${CRUSH_SERVER_ADDR:-tcp://0.0.0.0:9027}"
 LOG="${CRUSH_SERVER_LOG:-/tmp/crush-server.log}"
 PIDFILE="${CRUSH_SERVER_PID:-/tmp/crush-server.pid}"
 
-export CRUSH_SERVER_DETACH_GRACE="${CRUSH_SERVER_DETACH_GRACE:-1800}"
-export CRUSH_SERVER_IDLE_TIMEOUT="${CRUSH_SERVER_IDLE_TIMEOUT:-1800}"
+# 动作：直接赋值（不用 ${VAR:-默认}）→ 结果：上层 Crush 会话/父进程里残留的旧值不会静默覆盖这里
+export CRUSH_SERVER_DETACH_GRACE=604800   # 最后一条 SSE 断开后，workspace 保活 7 天（默认 10s）
+export CRUSH_SERVER_IDLE_TIMEOUT=604800   # 最后一个 workspace 拆掉后，服务再活 7 天（默认 60s）
 
 # 参数：pid
 # 核心流程：/proc 校验该 pid 确实是 my-crush，避免 PID 复用误杀/误判
@@ -48,11 +49,17 @@ start() {
   fi
   rm -f "$PIDFILE"
 
-  nohup "$BIN" server -H "$ADDR" >> "$LOG" 2>&1 &
-  pid=$!
-  echo "$pid" > "$PIDFILE"
-  sleep 1
-  if ! is_server "$pid"; then
+  # 动作：setsid 另起会话 + 断开 stdin → 结果：终端/IDE 退出不再把 server 带走
+  setsid /bin/sh -c "echo \$\$ > '$PIDFILE'; exec '$BIN' server -H '$ADDR'" \
+    </dev/null >>"$LOG" 2>&1 &
+
+  local i
+  for i in $(seq 1 20); do
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "${pid:-}" ] && is_server "$pid" && break
+    sleep 0.5
+  done
+  if [ -z "${pid:-}" ] || ! is_server "$pid"; then
     echo "failed to start; see $LOG"
     rm -f "$PIDFILE"
     return 1
