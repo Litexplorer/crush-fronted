@@ -134,8 +134,11 @@ export default function Home() {
         listWorkspaces(),
         listProjects().catch(() => [] as Project[]),
       ])
-      // 服务重启后列表为空：按上次打开的路径重建工作区，恢复会话入口
-      if (data.length === 0) {
+      // 两种失配都要走重建：列表为空（服务刚重启）；URL 里的 id 已失效（workspace 是进程内状态，
+      // 重启即消失）。否则页面会停在 "workspace not found" 且自身永远恢复不了
+      const urlId = params.workspaceId
+      const urlStale = Boolean(urlId) && !data.some((ws) => ws.id === urlId)
+      if (data.length === 0 || urlStale) {
         const path = recalledWorkspacePath()
         if (path) {
           // 重建上次打开的项目时带上本地 YOLO 缓存，避免权限模式被重置为关闭
@@ -144,7 +147,14 @@ export default function Home() {
           setWorkspaces(mergeProjects([ws], saved))
           setSelectedWorkspace(ws)
           setLoadState("ready")
-          navigate(`/w/${encodeURIComponent(ws.id)}`)
+          navigate(`/w/${encodeURIComponent(ws.id)}`, { replace: true })
+          return
+        }
+        if (urlStale) {
+          // 没有可重建的路径：退回列表页，别把失效 id 留在地址栏里反复报错
+          setWorkspaces(mergeProjects(data, saved))
+          setLoadState("ready")
+          navigate("/", { replace: true })
           return
         }
       }

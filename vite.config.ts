@@ -29,6 +29,15 @@ export default defineConfig({
         // 这里改为自行转发：响应头一到就 writeHead + flushHeaders 下发给浏览器。
         selfHandleResponse: true,
         configure: (proxy) => {
+          // 动作：剔除 Origin 并把 same-site 归一成 same-origin → 结果：后端不再把代理请求判成跨域
+          // 原因：Origin/Sec-Fetch-Site 描述的是"页面 → vite(8070)"，而 changeOrigin 把 Host 改成了
+          // "vite → 后端(9027)"，后端按 Origin.Host == r.Host 比，两边永远不等，一律 403
+          // "cross-origin requests are not allowed"。真正的 cross-site 请求保持原样，仍被后端拦下
+          proxy.on("proxyReq", (proxyReq, req) => {
+            if (req.headers.origin) proxyReq.removeHeader("origin")
+            const site = req.headers["sec-fetch-site"]
+            if (!site || site === "same-site") proxyReq.setHeader("sec-fetch-site", "same-origin")
+          })
           proxy.on("proxyRes", (proxyRes, _req, res) => {
             if (res.headersSent) return
             res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)

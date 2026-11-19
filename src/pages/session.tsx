@@ -612,6 +612,9 @@ export default function Session() {
             // 重建失败：继续走普通错误态
           }
         }
+        // 没有任何可重建的路径：退回项目列表，别把失效 workspace 的报错页留在地址栏
+        navigate("/", { replace: true })
+        return
       }
       setError(msg)
       setSession(undefined)

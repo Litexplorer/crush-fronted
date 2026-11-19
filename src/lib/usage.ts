@@ -99,8 +99,8 @@ export function cacheHitRate(hit?: number, miss?: number): number | undefined {
 /**
  * formatPercent
  * 参数：value 0-100 的百分比
- * 核心流程：保留一位小数，整数省略小数位，输出 87.3% / 92%
+ * 核心流程：固定两位小数，输出 87.36% / 92.00%
  */
 export function formatPercent(value: number): string {
-  return `${value.toFixed(1).replace(/\.0$/, "")}%`
+  return `${value.toFixed(2)}%`
 }
