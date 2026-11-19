@@ -83,3 +83,24 @@ export function formatTokens(n: number): string {
 export function formatChars(n: number): string {
   return compactCount(n, 2)
 }
+
+/**
+ * cacheHitRate
+ * 参数：hit 命中缓存的 prompt token 累计；miss 未命中缓存的 prompt token 累计
+ * 核心流程：按 DeepSeek 口径 hit / (hit + miss) 返回百分比；分母为 0 表示
+ *           没有可统计的样本（未上报或全部为估算值），返回 undefined
+ */
+export function cacheHitRate(hit?: number, miss?: number): number | undefined {
+  const total = (hit ?? 0) + (miss ?? 0)
+  if (total <= 0) return undefined
+  return ((hit ?? 0) / total) * 100
+}
+
+/**
+ * formatPercent
+ * 参数：value 0-100 的百分比
+ * 核心流程：保留一位小数，整数省略小数位，输出 87.3% / 92%
+ */
+export function formatPercent(value: number): string {
+  return `${value.toFixed(1).replace(/\.0$/, "")}%`
+}

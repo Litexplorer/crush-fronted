@@ -10,7 +10,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { Session } from "../lib/sessions"
 import type { FinishPartData, TimelineMessage } from "./message/parts"
-import { approxTokens, formatTokens, tokenRate } from "../lib/usage"
+import { approxTokens, formatTokens, tokenRate, cacheHitRate, formatPercent } from "../lib/usage"
 
 /** 与 internal/ui/common/rate.go 保持一致的采样参数 */
 const RATE_WINDOW = 1000
@@ -244,6 +244,14 @@ export default function UsageMeter(props: {
     return `Context: ${formatTokens(contextTokens())} / ${formatTokens(limit)} tokens`
   })
 
+  // prompt 缓存命中率：DeepSeek 口径 hit/(hit+miss)，服务端未上报时整块隐藏
+  const cacheRate = createMemo(() => cacheHitRate(props.session?.cache_read_tokens, props.session?.uncached_input_tokens))
+  const cacheTitle = createMemo(() => {
+    const hit = props.session?.cache_read_tokens ?? 0
+    const miss = props.session?.uncached_input_tokens ?? 0
+    return `Prompt cache: ${formatTokens(hit)} hit / ${formatTokens(hit + miss)} prompt tokens`
+  })
+
   const ringDash = createMemo(() => {
     const filled = (RING_CIRCUMFERENCE * Math.min(percent() ?? 0, 100)) / 100
     return `${filled} ${RING_CIRCUMFERENCE}`
@@ -280,6 +288,11 @@ export default function UsageMeter(props: {
             </Show>
           </svg>
           {percent()}%
+        </span>
+      </Show>
+      <Show when={cacheRate() !== undefined}>
+        <span class="whitespace-nowrap text-muted" title={cacheTitle()} aria-label={`Prompt cache hit rate ${formatPercent(cacheRate() ?? 0)}`}>
+          cache {formatPercent(cacheRate() ?? 0)}
         </span>
       </Show>
     </div>

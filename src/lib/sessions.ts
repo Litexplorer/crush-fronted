@@ -34,6 +34,10 @@ export interface Session {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  /** prompt 缓存累计（老服务端不返回，缺省按 0 处理） */
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  uncached_input_tokens?: number
   summary_message_id: string
   /** 首条 user 消息首行：会话列表的副标题（老服务端不返回该字段） */
   subtitle?: string

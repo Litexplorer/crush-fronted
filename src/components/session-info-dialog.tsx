@@ -12,7 +12,7 @@ import type { SelectedModel } from "../lib/models"
 import type { Session, SessionMessage } from "../lib/sessions"
 import { listLsps, listMcp, listSkills, type LspState, type McpState, type SkillInfo } from "../lib/diagnostics"
 import { getVersion } from "../lib/version"
-import { formatTokens } from "../lib/usage"
+import { formatTokens, cacheHitRate, formatPercent } from "../lib/usage"
 import { sessionChars } from "../lib/session-chars"
 import type { ApiError } from "../lib/http"
 import InfoSections from "./info-sections"
@@ -140,6 +140,14 @@ export default function SessionInfoDialog(props: {
   const costLabel = () => `$${(props.session?.cost ?? 0).toFixed(2)}`
   // 字符数分项：与 composer 工具条同一份逐消息缓存，打开弹窗不额外遍历分片
   const chars = createMemo(() => sessionChars(props.messages))
+  // prompt 缓存：命中率按 DeepSeek 口径 hit/(hit+miss)，分母为 0 表示服务端没上报
+  const cacheStats = createMemo(() => {
+    const read = props.session?.cache_read_tokens ?? 0
+    const miss = props.session?.uncached_input_tokens ?? 0
+    const rate = cacheHitRate(read, miss)
+    if (rate === undefined) return undefined
+    return { rate, read, miss, write: props.session?.cache_write_tokens ?? 0 }
+  })
 
   return (
     <div
@@ -200,6 +208,27 @@ export default function SessionInfoDialog(props: {
               <Show when={chars().tool > 0}>
                 <span class="text-faint">·</span>
                 <span class="text-muted">工具 {chars().tool.toLocaleString()}</span>
+              </Show>
+            </div>
+            {/* prompt 缓存：命中率 hit/(hit+miss)，旧会话没有样本时给占位而不是整行消失 */}
+            <div
+              class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]"
+              title="缓存命中率 = 命中 / (命中 + 未命中)"
+            >
+              <Show when={cacheStats()} fallback={<span class="text-faint">缓存 —</span>}>
+                {(stats) => (
+                  <>
+                    <span class="text-text">缓存命中 {formatPercent(stats().rate)}</span>
+                    <span class="text-faint">·</span>
+                    <span class="text-muted">命中 {formatTokens(stats().read)}</span>
+                    <span class="text-faint">·</span>
+                    <span class="text-muted">未命中 {formatTokens(stats().miss)}</span>
+                    <Show when={stats().write > 0}>
+                      <span class="text-faint">·</span>
+                      <span class="text-muted">写入 {formatTokens(stats().write)}</span>
+                    </Show>
+                  </>
+                )}
               </Show>
             </div>
           </div>
