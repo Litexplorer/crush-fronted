@@ -20,6 +20,7 @@ import { setSessionRunning } from "../lib/run-status"
 import { grantPermission, getSkip, setSkip, type PermissionAction, type PermissionRequest } from "../lib/permissions"
 import { answerQuestions, cancelQuestions, type QuestionRequest, type QuestionResponse } from "../lib/questions"
 import { MessageItem, textOf, type TimelineMessage, type ToolCallPartData, type ToolResultPartData } from "../components/message/parts"
+import { buildJobOutputGroups } from "../components/message/job-output"
 import { InlineTitle } from "../components/inline-title"
 import RunningIndicator from "../components/message/running-indicator"
 import { SubagentProvider, type SubagentStore } from "../components/message/subagent-context"
@@ -299,6 +300,8 @@ export default function Session() {
   const [workspaceInfo, setWorkspaceInfo] = createSignal<Workspace>()
 
   const [messages, setMessages] = createSignal<ChatMessage[]>([])
+  // 运行中工具的实时输出：tool_progress 事件按 shell_id 覆盖（尾部快照，非增量）
+  const [toolProgress, setToolProgress] = createSignal<Record<string, string>>({})
   // 消息加载态：loading 期间显示骨架，只有 ready 且确实为空才允许渲染 Empty session
   const [messagesState, setMessagesState] = createSignal<"loading" | "ready">("loading")
   // 是否还有更早的历史（后端 X-Has-More），决定顶部「加载更早」入口是否出现
@@ -977,6 +980,12 @@ export default function Session() {
     return map
   })
 
+  /** job_output 合并表：同一 shell_id 的多轮轮询按 offset 拼接，时间线只渲染一张卡 */
+  const jobOutputGroups = createMemo(() => buildJobOutputGroups(toolCalls(), toolResults()))
+
+  /** 实时输出按 shell_id 索引：卡片用 get(shellId) 取最新尾部快照 */
+  const toolProgressByShell = createMemo(() => new Map(Object.entries(toolProgress())))
+
   /** 会话字符数：全量消息按 WeakMap 缓存累计，SSE 增量只重算变动消息 */
   const charStats = createMemo(() => sessionChars(messages()))
 
@@ -1000,6 +1009,8 @@ export default function Session() {
     errors: subagentErrors,
     toolResults,
     toolCalls,
+    jobOutputGroups,
+    toolProgress: toolProgressByShell,
     reports: subagentReports,
     ensure: (sessionId) => void ensureSubagentLoaded(sessionId),
   }
@@ -1248,6 +1259,16 @@ export default function Session() {
    */
   function handleEvent(ev: WorkspaceEvent) {
     const sid = params.sessionId
+    // 运行中工具的实时输出（后端 tool_progress 事件）：按 shell_id 存尾部快照，
+    // Job Output 卡片收到后整体替换正文；与本会话无关的（子会话）事件直接丢弃
+    if (ev.type === "tool_progress") {
+      const progress = ev.payload as { session_id?: string; shell_id?: string; output?: string } | null
+      const shellId = progress?.shell_id
+      if (!progress || progress.session_id !== sid || !shellId) return
+      const output = typeof progress.output === "string" ? progress.output : ""
+      setToolProgress((prev) => (prev[shellId] === output ? prev : { ...prev, [shellId]: output }))
+      return
+    }
     // 权限模式变更：任何客户端（含 TUI）改模式、或工作区被重置，都按服务端值刷新开关，
     // 避免"开关显示 on 但实际仍在弹权限"的双向漂移
     if (ev.type === "permission_mode_changed") {

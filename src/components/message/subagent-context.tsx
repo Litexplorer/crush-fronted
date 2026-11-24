@@ -7,6 +7,7 @@
 import { createContext, useContext, type Accessor, type JSX } from "solid-js"
 import type { Session, SessionMessage } from "../../lib/sessions"
 import type { SubagentReportPartData } from "../../lib/subagents"
+import type { JobOutputGroup } from "./job-output"
 import type { ToolCallPartData, ToolResultPartData } from "./parts"
 
 export interface SubagentStore {
@@ -16,6 +17,10 @@ export interface SubagentStore {
   errors: Accessor<Record<string, string>>
   toolResults: Accessor<Map<string, ToolResultPartData>>
   toolCalls: Accessor<Map<string, ToolCallPartData>>
+  /** job_output 按 shell_id 合并后的卡片：同一后台任务的多轮读取只渲染一条 */
+  jobOutputGroups: Accessor<Map<string, JobOutputGroup>>
+  /** 运行中工具的实时输出尾部快照，按 shell_id 索引（来自 tool_progress 事件） */
+  toolProgress: Accessor<Map<string, string>>
   /** 后台子 agent 的回执，按 label 索引：派发卡片据此判断跑完并展示答复 */
   reports: Accessor<Map<string, SubagentReportPartData>>
   ensure: (sessionId: string) => void

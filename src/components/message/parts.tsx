@@ -5,7 +5,8 @@
  *           text            user 纯文本保留换行，assistant 走 Markdown
  *           reasoning       Thinking 折叠卡：默认展开且生成结束后保持展开，可点击手动收起
  *           tool_call       工具卡片：图标+名称+参数摘要，可展开 input JSON；
- *                           MCP 工具全部参数常显，按 tool_call_id 合并对应 tool_result 一并展示
+ *                           MCP 工具全部参数常显，按 tool_call_id 合并对应 tool_result 一并展示；
+ *                           job_output 按 shell_id 合并多轮增量读取，只渲染一张卡片
  *           tool_result     无对应调用时独立成卡
  *           sub_agent_report 后台子 agent 的回执，独立成卡渲染
  *           shell_command   $ command + output 等宽卡片
@@ -21,6 +22,8 @@ import { MindmapText } from "./mindmap-text"
 import SubagentCard from "./subagent-card"
 import SubagentReportCard from "./subagent-report-card"
 import { ClampedPreview } from "./clamped-preview"
+import { jobOutputShellId } from "./job-output"
+import JobOutputCard from "./job-output-card"
 import EditDiff, { parseEditDiff } from "./edit-diff"
 import ViewCode, { parseViewData, parseViewMedia, ViewMedia } from "./view-code"
 import ImagePreview from "./image-preview"
@@ -391,6 +394,26 @@ function AssistantParts(props: { message: TimelineMessage; showFinish?: boolean 
               const name = tc.name || "tool"
               // todos 工具由底部 Todo Dock 统一展示，时间线不再重复渲染
               if (name === "todos") return null
+              // job_output：同一 shell_id 的多轮读取（不同 offset）合并成一张卡片，
+              // 只在最后一次调用的位置渲染，避免每次轮询都刷出一张新卡
+              if (name === "job_output") {
+                const shellId = jobOutputShellId(tc.input)
+                const group = shellId ? subagent?.jobOutputGroups().get(shellId) : undefined
+                if (group) {
+                  if (tc.id && group.ownerId !== tc.id) return null
+                  const cardKey = `tool:job:${group.shellId}`
+                  // 任务还在跑时默认展开看实时日志，跑完自动收起（用户手动操作优先）
+                  const cardOpen = () => overrides()[cardKey] ?? !group.done
+                  return (
+                    <JobOutputCard
+                      group={group}
+                      live={subagent?.toolProgress().get(group.shellId)}
+                      open={cardOpen()}
+                      onToggle={() => toggle(cardKey, cardOpen())}
+                    />
+                  )
+                }
+              }
               const key = `tool:${tc.id ?? index()}`
               // agent 卡片只在真正运行时自动展开（参数落地≠跑完，只看结果是否回来），已完成的历史记录默认收起
               const autoOpen = () => key === `tool:${runningToolId()}` && (name !== "agent" || !result)
