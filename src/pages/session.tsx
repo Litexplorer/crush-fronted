@@ -31,6 +31,7 @@ import ModelSelect from "../components/model-select"
 import UsageMeter from "../components/usage-meter"
 import SessionInfoDialog from "../components/session-info-dialog"
 import { formatChars } from "../lib/usage"
+import { sayTip } from "../lib/notifications"
 import { sessionChars } from "../lib/session-chars"
 import type { SelectedModel } from "../lib/models"
 import PermissionDock from "../components/permission-dock"
@@ -362,9 +363,6 @@ export default function Session() {
   // YOLO 请求序号：切换工作区时自增，旧请求的响应回来直接丢弃，避免串台
   let yoloRequestSeq = 0
 
-  // Composer 轻提示：附件未支持 / 模型切换失败等一次性文案，2.5s 自动消失
-  const [composerToast, setComposerToast] = createSignal("")
-  let toastTimer: ReturnType<typeof setTimeout> | undefined
   // 消息跳转高亮定时器：重复点击时重置
   let highlightTimer: ReturnType<typeof setTimeout> | undefined
   // 滚动高亮的帧句柄：同一帧内的多次滚动事件只做一次可见行查询
@@ -445,9 +443,8 @@ export default function Session() {
    * 核心流程：写入 toast 状态并重置 2.5s 自动清除定时器（连续调用只保留最后一条）
    */
   function showComposerToast(msg: string) {
-    setComposerToast(msg)
-    if (toastTimer) clearTimeout(toastTimer)
-    toastTimer = setTimeout(() => setComposerToast(""), 2500)
+    // 统一交给右下角小鲸播报，页面内不再单独弹气泡
+    sayTip(msg)
   }
 
   /**
@@ -555,9 +552,8 @@ export default function Session() {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   })
 
-  // 离开页面：清理 toast、消息高亮与滚动同步的这些定时器
+  // 离开页面：清理消息高亮与滚动同步的这些定时器
   onCleanup(() => {
-    if (toastTimer) clearTimeout(toastTimer)
     if (highlightTimer) clearTimeout(highlightTimer)
     if (questionSyncFrame) cancelAnimationFrame(questionSyncFrame)
     if (questionSettleTimer) clearTimeout(questionSettleTimer)
@@ -2547,12 +2543,6 @@ export default function Session() {
                       onCancel={() => void handleQuestionCancel()}
                     />
                   )}
-                </Show>
-                {/* Composer 轻提示：附件未支持 / 模型切换失败等一次性文案 */}
-                <Show when={composerToast()}>
-                  <div class="mb-2 flex w-fit max-w-full items-center rounded-lg border border-edge bg-raised px-3 py-1.5 text-[12px] leading-4 text-text shadow-sm">
-                    {composerToast()}
-                  </div>
                 </Show>
                 {/* opencode 版式 Composer：rounded-xl、min-h 96px、pt 12px；底部行 = 左侧 + / 模型选择器，右侧圆形发送 */}
                 <div

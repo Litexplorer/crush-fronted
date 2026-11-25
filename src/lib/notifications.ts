@@ -10,11 +10,18 @@ import { subscribeEvents } from "./events"
 import { playNotificationSound } from "./notification-sound"
 import { activeSession, openSessions } from "./ui-store"
 
-/** 通知状态：done 正常完成 / error 报错 / cancelled 被取消 */
-export type NotificationStatus = "done" | "error" | "cancelled"
+/** 通知状态：done 正常完成 / error 报错 / cancelled 被取消 / tip 一次性提示 */
+export type NotificationStatus = "done" | "error" | "cancelled" | "tip"
+
+/** 通知档位：full 全部 / important 仅报错 / off 不弹气泡（未读圆点仍保留） */
+export type NotifyLevel = "full" | "important" | "off"
+
+const NOTIFY_LEVEL_KEY = "crush.mascot.level"
 
 export interface SessionNotification {
-  /** 会话 ID，同时用作去重键：同一会话只保留最后一条 */
+  /** session 会话结束通知（可跳转）；tip Composer 等一次性提示（不可跳转） */
+  kind: "session" | "tip"
+  /** 会话 ID，同时用作去重键；tip 为空串 */
   sessionId: string
   /** 会话标题，取自标签表 */
   title: string
@@ -37,13 +44,43 @@ const [viewingSessionId, setViewingSessionIdRaw] = createSignal<string | undefin
 /** 有「已完成但没看」结果的会话：标签上打角标用，独立于气泡（气泡会消失、会被覆盖） */
 const [unreadSessions, setUnreadSessions] = createSignal<ReadonlySet<string>>(new Set())
 
-/** 会话完成后是否弹通知：供未来加开关用，默认开 */
-const [notifyEnabled] = createSignal(true)
+/** 会话完成后是否弹通知：档位见 NotifyLevel；默认 full */
+function readNotifyLevel(): NotifyLevel {
+  try {
+    const raw = localStorage.getItem(NOTIFY_LEVEL_KEY)
+    if (raw === "important" || raw === "off") return raw
+  } catch {
+    // localStorage 不可用（隐私模式）时按默认档位处理
+  }
+  return "full"
+}
+
+const [notifyLevel, setNotifyLevelRaw] = createSignal<NotifyLevel>(readNotifyLevel())
+
+/** 每条 tip 的停留时长：比会话通知更短，避免抢戏 */
+const TIP_TTL_MS = 2_600
+/** tip 正文最大字符数 */
+const MAX_TIP_CHARS = 80
 
 /** 每条通知的自动消失计时器，键为会话 ID */
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
-export { notifications, viewingSessionId }
+export { notifications, viewingSessionId, notifyLevel }
+
+/**
+ * setNotifyLevel
+ * 参数：level 目标档位
+ * 核心流程：写信号并落 localStorage → 结果：重启后保留；切到 off 时立即清空气泡
+ */
+export function setNotifyLevel(level: NotifyLevel) {
+  setNotifyLevelRaw(level)
+  try {
+    localStorage.setItem(NOTIFY_LEVEL_KEY, level)
+  } catch {
+    // 存不进也不影响本次会话内的行为
+  }
+  if (level === "off") setNotifications([])
+}
 
 /**
  * summarize
@@ -135,14 +172,80 @@ export function dismissNotification(sessionId: string) {
  * 核心流程：每个气泡都只活 10 秒，不论当前停在哪个页面；
  *           没看过的结果由标签上的未读圆点留痕，气泡不再常驻
  */
-function startDismissTimer(sessionId: string) {
+function startDismissTimer(sessionId: string, ttl = NOTIFICATION_TTL_MS) {
   clearTimer(sessionId)
   timers.set(
     sessionId,
     setTimeout(() => {
       timers.delete(sessionId)
       dismissBubble(sessionId)
-    }, NOTIFICATION_TTL_MS),
+    }, ttl),
+  )
+}
+
+/**
+ * pauseBubble
+ * 参数：sessionId 会话 ID
+ * 核心流程：悬停时清掉自动消失计时 → 结果：气泡停住，直到离开或手动关闭
+ */
+export function pauseBubble(sessionId: string) {
+  if (!sessionId) return
+  clearTimer(sessionId)
+}
+
+/**
+ * resumeBubble
+ * 参数：sessionId 会话 ID
+ * 核心流程：离开悬停后重新计时 → 报错气泡不自动消失，其余重新给满一个 TTL
+ */
+export function resumeBubble(sessionId: string) {
+  if (!sessionId) return
+  const item = notifications().find((entry) => entry.sessionId === sessionId)
+  if (!item || item.status === "error") return
+  startDismissTimer(sessionId)
+}
+
+/**
+ * dismissTip
+ * 参数：无
+ * 核心流程：关掉当前提示气泡并清计时 → 结果：不影响任何会话通知与未读圆点
+ */
+export function dismissTip() {
+  const timer = timers.get("__tip__")
+  if (timer) {
+    clearTimeout(timer)
+    timers.delete("__tip__")
+  }
+  setNotifications((prev) => prev.filter((entry) => entry.kind !== "tip"))
+}
+
+/**
+ * sayTip
+ * 参数：text 一次性提示文案（附件不支持、模型切换失败等）
+ * 核心流程：按档位决定是否入队 → 组装 tip 条目（不可跳转、不标未读）
+ *           → 置顶并给短 TTL；同一文案已在顶部时不重复追加
+ */
+export function sayTip(text: string) {
+  if (notifyLevel() !== "full") return
+  const detail = summarize(text, "tip").slice(0, MAX_TIP_CHARS)
+  if (!detail) return
+  const head = notifications()[0]
+  if (head?.kind === "tip" && head.detail === detail) return
+  setNotifications((prev) =>
+    [
+      { kind: "tip" as const, sessionId: "", title: "提示", detail, status: "tip" as const, createdAt: Date.now() },
+      ...prev.filter((entry) => entry.kind === "session"),
+    ].slice(0, MAX_NOTIFICATIONS),
+  )
+  // tip 用独立键计时：sessionId 为空，不能复用按会话计时的 map
+  const timer = timers.get("__tip__")
+  if (timer) clearTimeout(timer)
+  timers.set(
+    "__tip__",
+    setTimeout(() => {
+      timers.delete("__tip__")
+      setNotifications((prev) => prev.filter((entry) => entry.kind !== "tip"))
+    }, TIP_TTL_MS),
   )
 }
 
@@ -166,10 +269,13 @@ export function setViewingSession(sessionId: string | undefined) {
  *           → 若正在看该会话则响铃；气泡统一 10 秒后自动消失
  */
 function pushNotification(sessionId: string, text: string | undefined, status: NotificationStatus) {
-  if (!notifyEnabled()) return
+  if (notifyLevel() === "off") return
+  // 「仅重要」档只放行报错，完成/取消只留未读圆点
+  if (notifyLevel() === "important" && status !== "error") return
   const tab = findTab(sessionId)
   if (!tab) return
   const entry: SessionNotification = {
+    kind: "session",
     sessionId,
     title: tab.title || "Untitled",
     detail: summarize(text, status),
@@ -182,7 +288,8 @@ function pushNotification(sessionId: string, text: string | undefined, status: N
   // 不在这个会话里跑完的，标签上留一个圆点：气泡 10 秒后消失，圆点要一直在
   markUnread(sessionId, !viewing)
   if (viewing) playNotificationSound()
-  startDismissTimer(sessionId)
+  // 报错要用户处理，不自动消失；其余按 TTL 自动收起
+  if (status !== "error") startDismissTimer(sessionId)
 }
 
 // 订阅全局 SSE：run_complete 说明某会话本回合已结束

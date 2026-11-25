@@ -1070,6 +1070,31 @@ svg.markmap-svg.markmap {
   }
 }
 
+/*
+ * 鲸鱼娘待机浮动（mascot-dock.tsx）
+ * 只动 transform，不触发重排；关闭动效时立绘静止
+ */
+@keyframes mascot-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.mascot-float {
+  animation: mascot-float 3.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-float {
+    animation: none;
+  }
+}
+
 /* 正文代码块默认 10 行预览（markdown.tsx 增强后加 data-code-clamp） */
 .md-body .md-code[data-code-clamp="collapsed"] {
   position: relative;

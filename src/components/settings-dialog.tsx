@@ -11,6 +11,14 @@ import { listSkills, type SkillInfo } from "../lib/diagnostics"
 import ThemeSelect from "./theme-select"
 import { rememberYolo } from "../lib/workspace-store"
 import ModelSelect from "./model-select"
+import { notifyLevel, setNotifyLevel, type NotifyLevel } from "../lib/notifications"
+
+/** 通知档位：全部 / 仅报错 / 关闭，与 lib/notifications 的 NotifyLevel 一一对应 */
+const LEVELS: { value: NotifyLevel; label: string }[] = [
+  { value: "full", label: "All" },
+  { value: "important", label: "Errors" },
+  { value: "off", label: "Off" },
+]
 
 export default function SettingsDialog(props: {
   ws: Workspace | undefined
@@ -101,6 +109,34 @@ export default function SettingsDialog(props: {
                   </div>
                 )}
               </Show>
+            </div>
+          </section>
+
+          <section class="flex flex-col gap-2">
+            <span class="text-[11px] font-medium uppercase tracking-wide text-faint">Notifications</span>
+            <div class="flex items-center justify-between gap-2 rounded-lg border border-edge px-3 py-2">
+              <div class="flex min-w-0 flex-col">
+                <span class="text-[13px] text-text">Mascot bubbles</span>
+                <span class="text-[11px] text-faint">Finished-run alerts from the mascot</span>
+              </div>
+              <div class="flex shrink-0 rounded-[7px] border border-edge p-0.5">
+                <For each={LEVELS}>
+                  {(level) => (
+                    <button
+                      type="button"
+                      class="rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-colors"
+                      classList={{
+                        "bg-raised text-text": notifyLevel() === level.value,
+                        "text-muted hover:text-text": notifyLevel() !== level.value,
+                      }}
+                      aria-pressed={notifyLevel() === level.value}
+                      onClick={() => setNotifyLevel(level.value)}
+                    >
+                      {level.label}
+                    </button>
+                  )}
+                </For>
+              </div>
             </div>
           </section>
 

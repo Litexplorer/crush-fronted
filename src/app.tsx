@@ -11,7 +11,7 @@
 import { onCleanup, onMount, type ParentProps } from "solid-js"
 import Titlebar from "./components/titlebar"
 import ServerBanner from "./components/server-banner"
-import NotificationCenter from "./components/notification-center"
+import MascotDock from "./components/mascot-dock"
 import CommandPalette from "./components/command-palette"
 import TabSwitcher from "./components/tab-switcher"
 import HistoryDialog from "./components/history-dialog"
@@ -69,7 +69,7 @@ export default function App(props: ParentProps) {
         {props.children}
       </main>
       {/* 会话完成通知：右下角气泡，独立于页面内容，避免切页丢失 */}
-      <NotificationCenter />
+      <MascotDock />
       {/* 命令面板：跨页面可用，按 Ctrl+K 唤起 */}
       <CommandPalette open={commandPaletteOpen()} onClose={closeCommandPalette} />
       {/* 标签列表（前缀 + G）、历史会话、本会话提问（前缀 + Q）、快捷键说明（前缀 + ?） */}
