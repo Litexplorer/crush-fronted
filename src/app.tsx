@@ -21,6 +21,7 @@ import ShortcutHelp from "./components/shortcut-help"
 import { closeCommandPalette, commandPaletteOpen, tabsCollapsed, tabsOrientation, toggleCommandPalette } from "./lib/ui-store"
 import { isMobile } from "./lib/viewport"
 import { startServerStatusPolling } from "./lib/server-status"
+import { startMascotReports, stopMascotReports } from "./lib/mascot-report"
 
 export default function App(props: ParentProps) {
   // 纵向标签栏固定占 196px 宽，窄屏会把内容区压没，移动端一律按横向排布
@@ -29,6 +30,9 @@ export default function App(props: ParentProps) {
   onMount(() => {
     // 启动全局服务端状态轮询：顶栏圆点与顶部提示条共用同一份状态
     startServerStatusPolling()
+    // 鲸鱼娘每 10 分钟巡检一次系统与上下文，用气泡播报
+    startMascotReports()
+    onCleanup(() => stopMascotReports())
 
     /**
      * handlePaletteShortcut

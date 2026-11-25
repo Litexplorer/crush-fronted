@@ -32,6 +32,7 @@ import UsageMeter from "../components/usage-meter"
 import SessionInfoDialog from "../components/session-info-dialog"
 import { formatChars } from "../lib/usage"
 import { sayTip } from "../lib/notifications"
+import { rememberContextWindow } from "../lib/mascot-stats"
 import { sessionChars } from "../lib/session-chars"
 import type { SelectedModel } from "../lib/models"
 import PermissionDock from "../components/permission-dock"
@@ -552,8 +553,9 @@ export default function Session() {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   })
 
-  // 离开页面：清理消息高亮与滚动同步的这些定时器
+  // 离开页面：清理消息高亮与滚动同步的这些定时器，并让巡检忘掉本页的模型窗口
   onCleanup(() => {
+    rememberContextWindow(undefined)
     if (highlightTimer) clearTimeout(highlightTimer)
     if (questionSyncFrame) cancelAnimationFrame(questionSyncFrame)
     if (questionSettleTimer) clearTimeout(questionSettleTimer)
@@ -2718,6 +2720,8 @@ export default function Session() {
                         onModelChange={(model, contextWindow, supportsImages) => {
                           setModelSelection(model)
                           setModelContextWindow(contextWindow)
+                          // 同步给鲸鱼娘巡检：上下文占比要用同一份窗口
+                          rememberContextWindow(contextWindow)
                           setModelSupportsImages(supportsImages)
                         }}
                       />
