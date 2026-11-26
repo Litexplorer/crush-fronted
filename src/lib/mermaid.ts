@@ -53,7 +53,7 @@ function buildConfig() {
     securityLevel: "strict" as const,
     htmlLabels: false,
     theme: "base" as const,
-    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif",
+    fontFamily: "'Fira Code', 'Sarasa Gothic SC', 'Sarasa UI SC', ui-sans-serif, system-ui, -apple-system, sans-serif",
     themeVariables: {
       background: cssVar("--bg-deep"),
       primaryColor: cssVar("--bg-raised"),

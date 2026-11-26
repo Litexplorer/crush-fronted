@@ -16,7 +16,7 @@ let echartsPromise: Promise<EChartsModule> | undefined
 
 /** 主题名固定：每次渲染前重新注册覆盖，避免主题切换后仍用旧配色 */
 const THEME_NAME = "crush-echarts"
-const FONT_FAMILY = "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif"
+const FONT_FAMILY = "'Fira Code', 'Sarasa Gothic SC', 'Sarasa UI SC', ui-sans-serif, system-ui, -apple-system, sans-serif"
 
 /** 分支配色：亮色主题偏深，暗色主题偏亮，保证两种背景下都有对比度 */
 const LIGHT_PALETTE = ["#1c7ed6", "#e8590c", "#2f9e44", "#c2255c", "#6741d9", "#0c8599", "#f08c00", "#495057", "#1098ad", "#a61e4d"]
